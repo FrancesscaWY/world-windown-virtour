@@ -144,3 +144,21 @@ test('native microphone automatically submits voiced PCM after silence and relea
   assert.equal((await voice.recognizeOnce()).error, 'permission-required'); assert.equal(captures, 1);
   voice.dispose();
 });
+
+test('native recorded question hands guided narration to fixed TTS without replaying model audio', async () => {
+  const timers = new Map(); let id = 0, created = 0;
+  const scope = { atob, location: { protocol: 'http:' },
+    setTimeout(fn) { timers.set(++id, fn); return id; }, clearTimeout(key) { timers.delete(key); },
+    AudioContext: class { state = 'running'; async resume() {} async close() {}
+      createBuffer() { created++; assert.fail('model audio must not be scheduled after sentence-guided tool'); } },
+  };
+  const trace = { id: 'move', name: 'move_camera', status: 'done', result: { status: 'success', sync_mode: 'sentence' } };
+  const voice = createNativeVoiceService({ scope, browserSpeech: { unlock() {}, stopSpeaking() {}, stopRecognition() {} },
+    fetchImpl: async () => stream([{ type: 'tool_end', trace }, { type: 'audio_delta', audio: validAudio }, { type: 'answer', content: '简短确认', traces: [trace] }]) });
+  const received = [], answers = [];
+  const result = await voice.respondToAudio(validAudio, {}, { onToolEnd: event => received.push(event), onAnswer: event => answers.push(event) });
+  assert.equal(result.status, 'success');
+  assert.deepEqual(received, [trace]); assert.equal(created, 0);
+  assert.equal(answers[0].audioSuppressed, true);
+  voice.dispose(); assert.equal(timers.size, 0);
+});

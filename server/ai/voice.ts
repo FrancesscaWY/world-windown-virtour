@@ -6,9 +6,10 @@ import { validateAudioUrl } from './config.ts';
 import { guideInstructions } from './llm.ts';
 import { tools, executeTool, modelToolOutput } from './tools.ts';
 import type { AgentInput, AgentResult, AudioProvider, ToolOutput, Trace } from './types.ts';
+import { createWebSearch, executeWebSearch } from './web-search.ts';
 
 export function voiceInstructions(city: string, pageContext?: AgentInput['pageContext']): string {
-  return `${guideInstructions(city, pageContext)}\n这是原生语音对话，请直接理解用户音频，并用简洁、自然的中文口语回答，不要使用 Markdown 或表情符号。像身旁轻声说一句，而不是主持节目；不朗读引用代码或动作描写。回答结束就交还话轮，不自行续讲。\n每一轮新的用户音频都必须独立判断工具需求。历史字幕只帮助理解上下文，不是本轮查询结果。凡是本轮询问景点、票价、行程、路线、预算、文化或世界之窗资料，即使历史中有相似问题或答案，也必须在本轮重新调用对应工具，拿到结果后才可陈述具体数据；不能复用、猜测或编造数据。路线规划必须调用 plan_route 提交景点顺序。天气没有工具，直接说明未接入。\n【语音输出边界】工具调用前和执行期间保持安静，不生成过渡语、调用说明或技术旁白。函数调用仅通过工具通道发送，绝不把调用写进普通文字或音频。拿到结果后直接说结论；如需继续查资料，继续静默调用，不播报步骤。工具名、英文标识、参数、JSON 和内部推理都不是可朗读内容。`;
+  return `${guideInstructions(city, pageContext)}\n这是原生语音对话，请直接理解用户音频，并用简洁、自然的中文口语回答，不要使用 Markdown 或表情符号。像身旁轻声说一句，而不是主持节目；不朗读引用代码或动作描写。回答结束就交还话轮，不自行续讲。\n每一轮新的用户音频都必须独立判断工具需求。历史字幕只帮助理解上下文，不是本轮查询结果。凡是本轮询问景点、票价、行程、路线、预算、文化或世界之窗资料，即使历史中有相似问题或答案，也必须在本轮重新调用对应工具，拿到结果后才可陈述具体数据；不能复用、猜测或编造数据。路线规划必须调用 plan_route 提交景点顺序。其他时效问题可以使用 search_web；未配置或失败时说明不能确认。\n【语音输出边界】工具调用前和执行期间保持安静，不生成过渡语、调用说明或技术旁白。函数调用仅通过工具通道发送，绝不把调用写进普通文字或音频。拿到结果后直接说结论；如需继续查资料，继续静默调用，不播报步骤。工具名、英文标识、参数、JSON 和内部推理都不是可朗读内容。`;
 }
 
 interface VoiceEvent {
@@ -33,7 +34,7 @@ export interface VoiceInput extends AgentInput {
   timeoutMs?: number;
 }
 
-export async function runVoice({ provider, audio, messages, city, pageContext, onEvent = () => {}, signal,
+export async function runVoice({ provider, audio, messages, city, pageContext, onEvent = () => {}, signal, webSearch = createWebSearch(),
   connect = (url, options) => new WebSocket(url, options), validateUrl = validateAudioUrl, timeoutMs = 120000 }: VoiceInput): Promise<AgentResult> {
   if (signal?.aborted) throw new Error('请求已取消。');
   const url = await validateUrl(provider.baseUrl);
@@ -83,7 +84,7 @@ export async function runVoice({ provider, audio, messages, city, pageContext, o
     socket.on('close', () => { if (!settled) finish(new Error('Qwen 语音连接中断，未收到完整回答，请重试。')); });
     signal?.addEventListener('abort', cancel, { once: true });
     if (signal?.aborted) { cancel(); return; }
-    socket.on('message', (raw: RawData) => {
+    socket.on('message', async (raw: RawData) => {
       if (settled) return;
       try {
         const event: VoiceEvent = JSON.parse(raw.toString());
@@ -142,7 +143,8 @@ export async function runVoice({ provider, audio, messages, city, pageContext, o
               try { trace.args = JSON.parse(call.arguments); }
               catch { output = { error: '工具调用参数不是合法 JSON。' }; }
               onEvent({ type: 'tool_start', trace: { ...trace } });
-              output ||= executeTool(call.name, trace.args);
+              output ||= call.name === 'search_web' ? await executeWebSearch(trace.args, webSearch, signal) : executeTool(call.name, trace.args, pageContext);
+              if (settled || signal?.aborted) return;
               Object.assign(trace, { result: output, duration: Date.now() - start, status: output.error ? 'error' : 'done' });
               traces.push(trace);
               onEvent({ type: 'tool_end', trace });

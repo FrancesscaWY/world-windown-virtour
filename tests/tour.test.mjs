@@ -66,3 +66,18 @@ test('visible viewport shrinks for keyboard, recovers, and disconnects cleanly',
   assert.equal(values.size, 0); assert.equal(root.dataset.compact, undefined);
   assert.equal(root.dataset.constrained, undefined);
 });
+
+test('keyboard detection follows editing and visual shrink, while a user pinch never shrinks the app',()=>{
+  const scope=new EventTarget(),visual=new EventTarget();
+  Object.assign(scope,{innerHeight:844,visualViewport:visual,document:{activeElement:{tagName:'BODY'}}});
+  Object.assign(visual,{height:844,offsetTop:0,scale:1});const values=new Map();
+  const root={dataset:{},style:{setProperty:(k,v)=>values.set(k,v),removeProperty:k=>values.delete(k)}};
+  const dispose=mountViewport(root,scope);
+  scope.document.activeElement={tagName:'INPUT'};scope.dispatchEvent(new Event('focusin'));
+  assert.equal(root.dataset.keyboard,'false');visual.height=430;visual.offsetTop=15;visual.dispatchEvent(new Event('resize'));
+  assert.equal(root.dataset.keyboard,'true');assert.equal(values.get('--viewport-height'),'430px');
+  visual.scale=2;visual.offsetTop=90;visual.height=220;visual.dispatchEvent(new Event('resize'));
+  assert.equal(root.dataset.keyboard,'false');assert.equal(values.get('--viewport-height'),'844px');assert.equal(values.get('--viewport-top'),'0px');
+  visual.scale=1;visual.offsetTop=0;visual.height=844;scope.document.activeElement={tagName:'BODY'};scope.dispatchEvent(new Event('focusout'));
+  assert.equal(root.dataset.keyboard,'false');dispose();assert.equal(root.dataset.keyboard,undefined);
+});

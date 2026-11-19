@@ -8,8 +8,12 @@ const errorMessage = {
   NotReadableError: '麦克风被占用，请检查系统输入设备后重拨。',
 };
 
+// Qwen can generate a long answer much faster than realtime. Match the backend's
+// 120-second audio bound instead of mistaking a normal generation burst for a stall.
+const maxPlaybackQueuedSeconds = 120;
+
 /** The microphone never stops while the assistant is playing or using tools. */
-export function createRealtimeCall({ scope = globalThis, onEvent = () => {}, createDetector = createCallVad } = {}) {
+export function createRealtimeCall({ scope = globalThis, onEvent = () => {}, createDetector = createCallVad, shouldPlayResponse = () => true } = {}) {
   let active = null, generation = 0;
   const now = () => scope.performance?.now() ?? Date.now();
   const release = stream => stream?.getTracks().forEach(track => track.stop());
@@ -73,6 +77,14 @@ export function createRealtimeCall({ scope = globalThis, onEvent = () => {}, cre
       for (const track of active.stream?.getAudioTracks() ?? []) track.enabled = !muted;
     },
     updateContext(state) { if (active?.ready) send(active, { type: 'context', context: pageContext(state) }); },
+    selectPoi(poiId,state) {
+      if(!active?.ready)return false;
+      send(active,{type:'selection',poiId,context:pageContext(state)});return true;
+    },
+    narrateLocation(poiId, state) {
+      if (!active?.ready || active.muted) return false;
+      send(active, { type:'arrival', poiId, context:pageContext(state) }); return true;
+    },
     start(state) {
       stop();
       const task = { token: ++generation, started: now(), inputSamples: 0, packets: 0, maxCaptureGapMs: 0,
@@ -94,8 +106,15 @@ export function createRealtimeCall({ scope = globalThis, onEvent = () => {}, cre
             }, video: false });
             if (!valid()) { release(stream); return; }
             task.stream = stream;
-            task.detector = createDetector({ scope,
-              onError: message => fail(task, message, 'vad-error'),
+            // Local VAD accelerates barge-in; cloud VAD remains authoritative.
+            // A browser WASM/Worker failure must not prevent the call itself.
+            const detectorUnavailable = message => {
+              scope.console?.warn('本地语音检测已停用，继续使用服务端语音检测。', message);
+              task.vadWarning = message;
+              diagnostic(task, 'error', { code: 'vad-unavailable', message });
+            };
+            try { task.detector = createDetector({ scope,
+              onError: detectorUnavailable,
               onSpeech(type, detection = {}) {
                 if (!valid() || !task.ready || task.muted) return;
                 const detectedMs = now() - task.started;
@@ -113,12 +132,12 @@ export function createRealtimeCall({ scope = globalThis, onEvent = () => {}, cre
                   boundaryClientMs: detection.boundaryClientMs, cloudSpeaking: task.serverSpeaking,
                 }, detectedMs);
               },
-            });
+            }); } catch (error) { detectorUnavailable(error.message || '无法创建语音检测 Worker'); }
             await resumed;
             if (!valid()) return;
             if (task.context.state !== 'running') throw new Error('请允许浏览器播放声音后重拨。');
             await task.context.audioWorklet.addModule(new URL('./call-capture-worklet.js', import.meta.url));
-            if (!await task.detector.ready) return;
+            if (task.detector && !await task.detector.ready) task.detector = null;
             if (!valid()) return;
             task.capture = new scope.AudioWorkletNode(task.context, 'call-capture');
             task.source = task.context.createMediaStreamSource(stream);
@@ -144,7 +163,7 @@ export function createRealtimeCall({ scope = globalThis, onEvent = () => {}, cre
               const captureMs = now() - task.started;
               if (task.lastCaptureMs !== undefined) task.maxCaptureGapMs = Math.max(task.maxCaptureGapMs, captureMs - task.lastCaptureMs);
               task.lastCaptureMs = captureMs; task.inputSamples += data.byteLength / 2; task.packets++;
-              if (!task.muted) task.detector.push(data, { sampleEnd: task.inputSamples, captureMs });
+              if (!task.muted) task.detector?.push(data, { sampleEnd: task.inputSamples, captureMs });
               if (task.packets % 100 === 0) {
                 diagnostic(task, 'capture_stats', { packets: task.packets, muted: task.muted, maxCaptureGapMs: task.maxCaptureGapMs, bufferedBytes: socket.bufferedAmount });
                 task.maxCaptureGapMs = 0;
@@ -158,22 +177,33 @@ export function createRealtimeCall({ scope = globalThis, onEvent = () => {}, cre
               try {
                 const event = JSON.parse(data);
                 if (event.type === 'ping') { send(task, { type: 'pong', id: event.id }); return; }
-                if (event.type === 'error') { fail(task, event.message, event.code); return; }
+                 if (event.type === 'error') { fail(task, event.message, event.code); return; }
+                 // This terminal server decision also wins a last-moment local barge-in.
+                 if (event.type === 'call_ended') { stop(); onEvent(event); return; }
                 if (event.type === 'ready') {
                   task.ready = true; task.callId = event.callId; task.lastPacket = Date.now(); scope.clearTimeout(task.timeout);
                   diagnostic(task, 'connected', { wallTimeMs: Date.now(), sampleRate: task.context.sampleRate,
                     outputLatencyMs: (task.context.outputLatency || task.context.baseLatency || 0) * 1000,
-                    userAgent: (scope.navigator.userAgent ?? '').slice(0, 1000) });
+                     userAgent: (scope.navigator.userAgent ?? '').slice(0, 1000) });
+                  if (task.vadWarning) diagnostic(task, 'error', { code: 'vad-unavailable', message: task.vadWarning });
                   task.visibility = () => diagnostic(task, 'visibility', { state: scope.document.visibilityState });
                   scope.document?.addEventListener('visibilitychange', task.visibility);
                   onEvent(event); return;
                 }
                 if (event.type === 'speech_started') { interrupt(task, undefined, 'cloud-vad'); task.turn = event.turn; task.serverSpeaking = true; diagnostic(task, 'cloud_speech_started'); onEvent(event); return; }
                 if (event.type === 'speech_stopped') { task.serverSpeaking = false; diagnostic(task, 'cloud_speech_stopped'); onEvent(event); return; }
-                if (event.type === 'transcript') { onEvent(event); return; }
+                 if (event.type === 'transcript') { onEvent(event); return; }
+                  if (event.type === 'arrival') {
+                   if (event.status === 'started' && Number.isInteger(event.turn)) task.turn=event.turn;
+                   onEvent(event); return;
+                 }
                 if (event.type === 'response_started') {
                   if (event.turn < task.turn || event.turn <= task.blockedTurn) {
                     send(task, { type: 'interrupt', responseId: event.responseId, played: [] }); return;
+                  }
+                  if(event.type==='selection'){
+                    if(event.status==='started' && Number.isInteger(event.turn))active.turn=event.turn;
+                    onEvent(event);return;
                   }
                   task.currentId = event.responseId;
                   task.responses.set(event.responseId, { cancelled: false, drained: false, player: null });
@@ -185,9 +215,12 @@ export function createRealtimeCall({ scope = globalThis, onEvent = () => {}, cre
                   if (event.type === 'audio') diagnostic(task, 'audio_dropped', { responseId: event.responseId, reason: response?.cancelled ? 'cancelled' : 'stale-or-unknown' });
                   return;
                 }
-                if (event.type === 'response_cancelled') { interrupt(task, event.responseId, 'provider-cancelled'); return; }
-                if (event.type === 'audio') {
-                  if (!response.player) response.player = createPcmPlayback(task.context, { scope, clock: task.clock, maxQueuedSeconds: 30,
+                 if (event.type === 'response_cancelled') { interrupt(task, event.responseId, 'provider-cancelled'); return; }
+                 if (event.type === 'tool_end' && event.trace?.name === 'move_camera' && event.trace.status === 'done'
+                   && event.trace.result?.status === 'success' && event.trace.result.sync_mode === 'sentence') task.guidedTurn = event.turn;
+                 if (event.type === 'audio') {
+                   if (task.guidedTurn === event.turn || !shouldPlayResponse()) { response.player?.stop(); response.player = null; return; }
+                  if (!response.player) response.player = createPcmPlayback(task.context, { scope, clock: task.clock, maxQueuedSeconds: maxPlaybackQueuedSeconds,
                     onStart: () => { if (valid() && !response.cancelled) { diagnostic(task, 'playback_started', { responseId: event.responseId }); onEvent({ type: 'playback_started', responseId: event.responseId }); } } });
                   const schedule = response.player.append(event.audio, event);
                   if (schedule) diagnostic(task, 'playback_chunk', { responseId: event.responseId, itemId: event.itemId,
@@ -201,7 +234,12 @@ export function createRealtimeCall({ scope = globalThis, onEvent = () => {}, cre
                     if (valid() && !response.cancelled && task.currentId === event.responseId) onEvent({ type: 'playback_done', responseId: event.responseId, continuing: event.continuing });
                   });
                   onEvent(event);
-                } else onEvent(event);
+                 } else {
+                   onEvent(event.type === 'answer' && task.guidedTurn === event.turn ? { ...event, audioSuppressed: true } : event);
+                   // The session can turn a simple spoken introduction into an actual
+                   // sentence-guided panorama. Keep that entire turn on the fixed player.
+                   if(event.type==='tool_end' && !shouldPlayResponse())task.guidedTurn=event.turn;
+                 }
               } catch (error) { fail(task, error.message || '通话音频处理失败，请重拨。', 'audio-error'); }
             };
           } catch (error) { if (valid()) fail(task, errorMessage[error.name] || error.message || '无法开启通话。', error.name === 'NotAllowedError' ? 'not-allowed' : 'start-failed'); }

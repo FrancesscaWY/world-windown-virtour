@@ -130,7 +130,7 @@ function layerOf(element) {
  * @param {{bbox: [number, number, number, number]}} options west,south,east,north (WGS84).
  * @returns {{svg: string, positions: {eiffel:{x:number,y:number},arc:{x:number,y:number},pyramid:{x:number,y:number}}, sourceNote: string}}
  */
-export function buildOsmMap(overpassJson, { bbox } = {}) {
+export function buildOsmMap(overpassJson, { bbox, surroundings = false } = {}) {
   if (!Array.isArray(bbox) || bbox.length !== 4 || !bbox.every(Number.isFinite)) throw new TypeError('OSM_MAP_INVALID_BBOX: provide [west,south,east,north].');
   const [west, south, east, north] = bbox;
   if (!(west < east && south < north && west >= -180 && east <= 180 && south > -85 && north < 85)) throw new RangeError('OSM_MAP_INVALID_BBOX: bounds must be ordered WGS84 coordinates, excluding polar regions.');
@@ -200,7 +200,7 @@ export function buildOsmMap(overpassJson, { bbox } = {}) {
   const sourceNote = `© OpenStreetMap contributors · ODbL 1.0 · ${SOURCE_URL} · Static SVG derived from supplied OSM/Overpass geometry; no tile images used.`;
   // Attribution is shown once by mapMarkup, outside the transformed artwork.
   // Keep provenance in the exported SVG description, without a baked-in footer.
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" role="img" aria-labelledby="osm-map-title osm-map-desc"><title id="osm-map-title">世界之窗 · OpenStreetMap 地理示意地图</title><desc id="osm-map-desc">${xml(sourceNote)}</desc><defs><clipPath id="osm-map-bounds"><rect width="${width}" height="${height}"/></clipPath>${parkClip}</defs><g clip-path="url(#osm-map-bounds)"><g${parkShape ? ' clip-path="url(#osm-park-shape)"' : ''}>${Object.values(layers).flat().join('')}</g>${boundaryOverlay}</g></svg>`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" role="img" aria-labelledby="osm-map-title osm-map-desc"><title id="osm-map-title">世界之窗 · OpenStreetMap 地理示意地图</title><desc id="osm-map-desc">${xml(sourceNote)}</desc><defs><clipPath id="osm-map-bounds"><rect width="${width}" height="${height}"/></clipPath>${parkClip}</defs><g clip-path="url(#osm-map-bounds)">${surroundings?`<rect width="${width}" height="${height}" fill="#f0eeea"/>`:''}<g${parkShape && !surroundings ? ' clip-path="url(#osm-park-shape)"' : ''}>${Object.values(layers).flat().join('')}</g>${boundaryOverlay}</g></svg>`;
 
   return { svg, positions, sourceNote, poiSources: Object.fromEntries(LANDMARK_IDS.map(id => [id, candidates[id].map(({ element }) => ({ type: element.type, id: element.id, name: namesOf(element)[0] }))])) };
 }

@@ -17,15 +17,22 @@ test('recommendation targets explicit offers and dismissal survives unrelated up
   assert.equal(recommendation.update({ ...state, recommendedPoiIds:[], mentionedPoiId:'arc' }).hidden, false);
 });
 
-test('map conversation floats chat above the map while immersive and companion keep their layouts', () => {
+test('text selection opens split history, editing alone goes fullscreen and companion never has text', () => {
   const state = createStore().get();
-  assert.equal(modeLayout(state), 'map-chat');
-  assert.equal(modeLayout({ ...state, interactionInput:'text' }), 'map-chat');
+  assert.equal(state.interactionMode, null);
+  assert.equal(modeLayout(state), 'map');
+  assert.equal(modeLayout({ ...state, interactionInput:'text' }), 'map');
+  assert.equal(modeLayout({ ...state, interactionMode:'text' }), 'split');
+  assert.equal(modeLayout({ ...state, interactionMode:'text', conversationExpanded:true }), 'split');
+  assert.equal(modeLayout({ ...state, interactionMode:'realtime' }), 'map');
+  assert.equal(modeLayout({ ...state, interactionMode:'realtime', conversationExpanded:true }), 'map');
+  assert.equal(modeLayout({ ...state, interactionMode:'text', textEditing:true }), 'text');
+  assert.equal(modeLayout({ ...state, tourMode:'companion', interactionMode:'text', textEditing:true }), 'map');
   for (const interactionInput of ['voice', 'text']) {
     assert.equal(modeLayout({ ...state, interactionInput, tourMode:'immersive' }), 'split');
     assert.equal(modeLayout({ ...state, interactionInput, tourMode:'companion' }), 'map');
   }
-  assert.match(modeHint(state), /打字或语音/);
+  assert.equal(modeHint(state), '想聊聊？点耳麦开始交流');
   assert.equal(modeHint({ ...state, tourMode:'companion' }), COMPANION_GREETING);
   assert.equal(modeHint({ ...state, tourMode:'immersive' }), '打字和我聊聊');
   assert.match(contextualPrompt({ ...state, mentionedPoiId:'arc' }).text, /凯旋门/);

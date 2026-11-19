@@ -34,7 +34,7 @@ test('Fastify reports unconfigured/live states without leaking keys or endpoint 
     assert.equal(response.json().providerStatus, 'configuration-only');
     assert.doesNotMatch(response.body, /hidden-text|hidden-audio|private-url/);
     assert.equal((await app.inject('/api/health')).json().ok, true);
-    assert.equal((await app.inject('/api/tools')).json().length, 7);
+    assert.equal((await app.inject('/api/tools')).json().length, 14);
     for (const url of ['/api/chat', '/api/config']) assert.equal((await app.inject(url)).statusCode, 404);
     assert.equal((await app.inject({ method: 'PUT', url: '/api/config', payload: {} })).statusCode, 404);
   }
@@ -76,9 +76,9 @@ test('invalid JSON, input types, oversized bodies and methods fail before model 
   assert.equal((await app.inject('/api/missing')).statusCode, 404);
 });
 
-test('API rejects cross-site requests, with no anonymous model settings endpoint', async t => {
+test('API accepts any Origin, with no anonymous model settings endpoint', async t => {
   const app = appFor(t);
-  for (const headers of [{ origin: 'https://evil.example' }, { 'sec-fetch-site': 'cross-site' }, { origin: 'null' }]) assert.equal((await post(app, { text: '你好' }, { headers })).statusCode, 403);
+  for (const headers of [{ origin: 'https://evil.example' }, { 'sec-fetch-site': 'cross-site' }, { origin: 'null' }]) assert.equal((await post(app, { text: '你好' }, { headers })).statusCode, 503);
   assert.equal((await app.inject({ method: 'PUT', url: '/api/config', payload: {} })).statusCode, 404);
 });
 

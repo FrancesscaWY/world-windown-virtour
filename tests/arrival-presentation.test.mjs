@@ -86,6 +86,25 @@ test('reduced motion navigates immediately and a failed navigation restores a us
   failing.dispose();
 });
 
+test('native document transitions navigate without a blank exit delay; fallback returns slide right', () => {
+  const native = fixture();
+  native.host.onpageswap = null;
+  native.host.CSS = { supports:() => true };
+  const transition = mountPageTransitions(native.root, native.options);
+  native.click();
+  assert.deepEqual(native.navigations, [native.link.href]);
+  assert.equal(native.timers.size, 0);
+  transition.dispose();
+  const fallback = fixture();
+  fallback.host.location.href = 'http://localhost/modes.html';
+  const back = mountPageTransitions(fallback.root, fallback.options);
+  back.go('http://localhost/index.html');
+  assert.equal(fallback.root.styles.get('--arrival-slide'), '-100%');
+  fallback.flush();
+  assert.deepEqual(fallback.navigations, ['http://localhost/index.html']);
+  back.dispose();
+});
+
 test('card depth batches mouse movement, bounds tilt, ignores touch and cancels pending frames', () => {
   const f = fixture(), card = surface();
   card.getBoundingClientRect = () => ({ left:0, top:0, width:200, height:300 });

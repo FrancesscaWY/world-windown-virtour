@@ -136,6 +136,18 @@ test('inspector does not attribute a cloud interruption to a later local detecti
   assert.equal(interruption.vadEstimatedOnsetToStopMs, null);
 });
 
+test('inspector excludes acknowledged cancellation races with or without error.event_id, not other errors', () => {
+  const rows = [
+    { source: 'provider.in', event: { type: 'error', error: { event_id: 'cancel-linked' } } },
+    { source: 'server', event: { type: 'cancel.race_ignored', eventId: 'cancel-linked' } },
+    { source: 'provider.in', event: { type: 'error', event_id: 'provider-unlinked', error: { param: 'response.cancel' } } },
+    { source: 'server', event: { type: 'cancel.race_ignored', eventId: 'cancel-unlinked', providerEventId: 'provider-unlinked' } },
+    { source: 'provider.in', event: { type: 'error', event_id: 'other-provider-error', error: { message: 'Other error' } } },
+    { source: 'browser.out', event: { type: 'error', code: 'provider-error' } },
+  ];
+  assert.deepEqual(summarizeCall(rows).errors, rows.slice(-2));
+});
+
 test('call inspector wakes on the next finalized call without polling', { timeout: 10000 }, async t => {
   await mkdir('agent-tmp', { recursive: true });
   const root = await mkdtemp(resolve('agent-tmp/call-watch-test-'));

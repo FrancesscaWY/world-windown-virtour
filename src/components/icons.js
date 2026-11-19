@@ -1,4 +1,14 @@
+import { landmarkArt } from './landmark-art.js';
 const paths = {
+  send: '<path d="m21 3-6.5 18-3.8-7.7L3 9.5 21 3Z"/><path d="m10.7 13.3 5-5"/>',
+  realtime: '<rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-3 0h6"/>',
+  duplex: '<circle cx="12" cy="12" r="9"/><path d="M7 10v4M10 7v10M14 9v6M17 10v4" stroke-width="2" class="duplex-wave"/>',
+  headset: '<path d="M4 13v-2a8 8 0 0 1 16 0v5a4 4 0 0 1-4 4h-3"/><rect x="3" y="11" width="4" height="7" rx="2"/><rect x="17" y="11" width="4" height="7" rx="2"/><path d="M10 9h4m-5 3h6"/><rect x="10" y="19" width="4" height="2" rx="1"/>',
+  conversation: '<path d="M14 14H8l-5 3V6a3 3 0 0 1 3-3h11a3 3 0 0 1 3 3v4"/><path d="M10 10h8a3 3 0 0 1 3 3v8l-4-3h-7a3 3 0 0 1-3-3v-2a3 3 0 0 1 3-3Z"/>',
+  history: '<path d="M3 10a9 9 0 1 1 1 7M3 4v6h6"/><path d="M12 7v5l3 2"/>',
+  'new-chat': '<path d="M20 12v3a4 4 0 0 1-4 4H9l-6 3V7a4 4 0 0 1 4-4h7M19 2v7m-3.5-3.5h7"/>',
+  rotate: '<path d="M20 8a9 9 0 1 0 .5 7M20 3v5h-5"/>',
+  chat: '<path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5H6l-4 2 1.6-5A8.5 8.5 0 1 1 21 11.5Z"/><path d="M7 11h.01M12 11h.01M17 11h.01" stroke-width="2.5"/>',
   keyboard: '<rect x="2" y="5" width="20" height="14" rx="2"/><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 12h.01M10 12h.01M14 12h.01M18 12h.01M7 16h10"/>',
   pause: '<path d="M9 5v14M15 5v14" stroke-width="3"/>',
   muted: '<path d="M4 9h4l5-4v14l-5-4H4Zm13 0 5 6m0-6-5 6"/>',
@@ -13,6 +23,7 @@ const paths = {
   listening: '<path class="listening-bar" d="M4 10v4"/><path class="listening-bar" d="M8 7v10"/><path class="listening-bar" d="M12 4v16"/><path class="listening-bar" d="M16 7v10"/><path class="listening-bar" d="M20 10v4"/>',
   narrating: '<path d="M7 3h10a4 4 0 0 1 4 4v7a4 4 0 0 1-4 4h-6l-5 4v-4a3 3 0 0 1-3-3V7a4 4 0 0 1 4-4Z"/><path class="narration-bar" d="M8 9v3"/><path class="narration-bar" d="M12 7v7"/><path class="narration-bar" d="M16 8v5"/>',
   settings: '<path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3" fill="currentColor"/><circle cx="15" cy="17" r="3" fill="currentColor"/>',
+  more: '<circle cx="5" cy="12" r="1" fill="currentColor"/><circle cx="12" cy="12" r="1" fill="currentColor"/><circle cx="19" cy="12" r="1" fill="currentColor"/>',
   compass: '<circle cx="12" cy="12" r="9"/><path d="m16 8-2.5 5.5L8 16l2.5-5.5Z"/>',
   panorama: '<path d="M3 6c6-3 12-3 18 0v12c-6-3-12-3-18 0Z"/><path d="m4 15 5-5 5 4 3-3 4 4"/><circle cx="15" cy="7" r="1"/>',
   check: '<path d="m5 12 4 4L19 6"/>',
@@ -44,7 +55,7 @@ export function landmark(id, className = '') {
     'tower-bridge': '<path d="M6 73h84v9H6Zm13-38h15v53H19Zm43 0h15v53H62Z" fill="#cdbb9b"/><path d="m16 35 10-20 12 20m21 0 10-20 12 20" fill="#8ca7b0"/><path d="M32 52h32M4 70q12 0 20-17m48 0q8 17 20 17" fill="none" stroke="#7ea6b8" stroke-width="5"/>',
     pyramid: '<path d="M48 17 94 88H3Z" fill="#d5ad65"/><path d="M48 17 62 88H3Z" fill="#f0d99c"/><path d="M14 72h45M24 55h32M35 39h18M8 82h53" stroke="#c8ac70" stroke-width="2"/>',
   };
-  return `<svg class="landmark ${className}" viewBox="0 0 96 104" aria-hidden="true">${shapes[id] ?? '<circle cx="48" cy="49" r="29" fill="#c4dbe0"/><ellipse cx="48" cy="49" rx="13" ry="29" fill="none" stroke="#7da5b0" stroke-width="3"/><path d="M19 49h58M24 33h48M24 65h48" stroke="#7da5b0" stroke-width="3"/><path d="M27 85h42" stroke="#c4d2c3" stroke-width="4" stroke-linecap="round"/>' }</svg>`;
+  return `<svg class="landmark ${className}" viewBox="0 0 96 104" aria-hidden="true">${shapes[id] ?? landmarkArt[id] ?? ''}</svg>`;
 }
 
 /** Original vector travel companion; facial states are driven by actual guide events. */
@@ -80,7 +91,17 @@ export function avatar() {
   </svg>`;
 }
 
-export function facilityIcon(kind) {
+export function facilityIcon(kind, id = '') {
+  // Distinct illustrated shop markers, not unsupported claims about cuisine.
+  const shops = {
+    'rome-dining': ['#bd7962','#edd6ad','<path d="M9 20h30v5H9Z" fill="#bd7962"/><path d="M12 20v5m8-5v5m8-5v5m8-5v5" stroke="#fff3dc" stroke-width="4"/>'],
+    'caesar-dining': ['#839774','#eee4c6','<path d="m7 21 17-12 17 12Z" fill="#839774"/><path d="M13 25v14m22-14v14" stroke="#839774" stroke-width="4"/>'],
+    'falls-dining': ['#689ca0','#d9e9df','<path d="M10 20q7-9 14 0t14 0" fill="none" stroke="#689ca0" stroke-width="5"/><path d="M12 13v-3m7 3V8m7 5v-3" stroke="#689ca0" stroke-width="2" stroke-linecap="round"/>'],
+  };
+  if (kind === 'food' && shops[id]) {
+    const [color, paper, roof] = shops[id];
+    return `<svg class="facility-icon dining-landmark" viewBox="0 0 48 48" aria-hidden="true"><rect x="10" y="21" width="28" height="21" rx="3" fill="${paper}"/>${roof}<path d="M9 42h30" stroke="${color}" stroke-width="2"/><rect x="21" y="28" width="7" height="14" rx="3" fill="${color}"/><path d="M14 29h3m14 0h3" stroke="${color}" stroke-width="3" stroke-linecap="round"/></svg>`;
+  }
   const shapes = {
     toilets:'<circle cx="7" cy="4" r="2"/><circle cx="17" cy="4" r="2"/><path d="M5 9h4v6H8v6H6v-6H5Zm10 0h4l2 8h-3v4h-2v-4h-3Z"/>',
     gate:'<path d="M4 4h10v17H4Z" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M10 12h11m-4-4 4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',

@@ -1,25 +1,23 @@
 import type { FastifyInstance } from 'fastify';
 import { WebSocketServer } from 'ws';
 import { createRealtimeBridge } from './ai/realtime.ts';
-import { readPublicOrigins, isAllowedOrigin } from './origin.ts';
 import type { AudioProvider } from './ai/types.ts';
 import { resolve } from 'node:path';
 import { projectRoot } from './handler.ts';
 import { createCallJournal } from './call-log.ts';
 import type { CallJournal } from './call-log.ts';
+import type { WebSearch } from './ai/web-search.ts';
 
-export function registerRealtime(app: FastifyInstance, { env, provider, bridge = createRealtimeBridge }: {
-  env: NodeJS.ProcessEnv; provider: AudioProvider; bridge?: typeof createRealtimeBridge;
+export function registerRealtime(app: FastifyInstance, { env, provider, bridge = createRealtimeBridge, webSearch }: {
+  env: NodeJS.ProcessEnv; provider: AudioProvider; bridge?: typeof createRealtimeBridge; webSearch?: WebSearch;
 }) {
   const server = new WebSocketServer({ noServer: true, maxPayload: 65536, perMessageDeflate: false });
-  const origins = readPublicOrigins(env);
   const calls = new Set<ReturnType<typeof createRealtimeBridge>>();
   const logClosures = new Set<Promise<void>>();
   let closing = false;
   app.server.on('upgrade', (request, socket, head) => {
     const reject = (status: number) => { socket.end(`HTTP/1.1 ${status} Rejected\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`); };
     if (request.url !== '/api/voice/realtime') { reject(404); return; }
-    if (!request.headers.origin || request.headers['sec-fetch-site'] === 'cross-site' || !isAllowedOrigin(request.headers.origin, request.headers.host, origins)) { reject(403); return; }
     if (closing || calls.size >= 3) { reject(503); return; }
     server.handleUpgrade(request, socket, head, client => {
       let call: ReturnType<typeof createRealtimeBridge> | undefined;
@@ -32,7 +30,7 @@ export function registerRealtime(app: FastifyInstance, { env, provider, bridge =
             call?.close('logging-error');
           },
         });
-        call = bridge({ client, provider, journal, onClose: () => {
+        call = bridge({ client, provider, journal, webSearch, onClose: () => {
           if (call) calls.delete(call);
           const done = journal!.close(); logClosures.add(done); void done.finally(() => logClosures.delete(done));
         } });

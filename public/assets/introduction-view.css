@@ -1,0 +1,35 @@
+/* Paper photographs unfold around a landmark, without replacing the map. */
+.introduction-view { position:absolute; inset:0; z-index:5; pointer-events:none; color:var(--tour-ink,#443d2c); }
+.introduction-threads { position:absolute; inset:0; width:100%; height:100%; overflow:visible; }
+.introduction-threads path { fill:none; stroke:#9d8b60; stroke-width:1.2; stroke-dasharray:3 5; opacity:0; }
+.introduction-center { position:absolute; width:66px; height:66px; border:1px solid #b59a58aa; border-radius:50%; transform:translate(-50%,-50%); box-shadow:0 0 0 10px #d5bc7725,0 0 35px #efdfaa66; }
+.introduction-label { position:absolute; transform:translate(-50%,0); padding:5px 12px; border:1px solid #d4c397; border-radius:20px; color:#6a5836; background:#fffaf0f5; box-shadow:0 4px 12px #6a583615; white-space:nowrap; font-size:11px; letter-spacing:.08em; }
+.introduction-close { position:absolute; display:grid; place-items:center; width:32px; height:32px; border:1px solid #e4d5b6; border-radius:50%; background:#fffaf0f5; color:#8c7856; pointer-events:auto; z-index:2; box-shadow:0 4px 12px #6a583615; }
+.introduction-close .icon { width:16px; height:16px; }
+.introduction-close:hover { color:#4e6248; background:#fffdf8; }
+.introduction-photo { position:absolute; display:flex; flex-direction:column; margin:0; padding:6px 6px 0; border:1px solid #ffffff; border-radius:5px; background:var(--tour-paper,#fffaf0); box-shadow:0 16px 30px #55472b25,0 3px 7px #55472b14; transform:translate(-50%,-50%) rotate(var(--tilt)); opacity:0; will-change:transform,opacity; }
+.introduction-photo img { display:block; width:100%; height:0; min-height:0; flex:1; object-fit:cover; border-radius:2px; background:#e9e5d7; }
+.introduction-photo figcaption { flex:none; padding:7px 3px 8px; min-width:0; }
+.introduction-photo strong { display:block; color:#675839; font-size:12px; font-weight:600; letter-spacing:.08em; }
+.introduction-photo figcaption > span { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-top:3px; color:#a38e69; font-size:9px; }
+.introduction-photo[data-failed="true"] { justify-content:center; background:#f4ecda; }
+.introduction-photo[data-compact="true"] { padding:4px 4px 0; }
+.introduction-photo[data-compact="true"] figcaption { position:static; padding:4px 1px; }
+.introduction-photo[data-compact="true"] strong { font-size:9px; line-height:12px; white-space:nowrap; }
+.introduction-photo[data-compact="true"] figcaption > span { display:none; }
+.introduction-view[data-phase="open"] .introduction-photo { animation:introduction-unfold 850ms cubic-bezier(.16,1,.3,1) calc(var(--order) * 140ms) both; }
+.introduction-view[data-phase="open"] .introduction-threads path { animation:introduction-thread 700ms ease calc(var(--order) * 140ms) both; }
+.map-viewport[data-introducing="true"] .map-poi:not(.introducing-poi),
+.map-viewport[data-introducing="true"] .map-facility { opacity:.18; transition:opacity .4s; }
+.map-viewport[data-introducing="true"] .map-mood { visibility:hidden; }
+.map-viewport[data-introducing="true"] .introducing-poi { z-index:4; }
+@keyframes introduction-unfold {
+  from { opacity:0; transform:translate(calc(-50% + var(--from-x)),calc(-50% + var(--from-y))) rotate(0deg) scale(.15); }
+  to { opacity:1; transform:translate(-50%,-50%) rotate(var(--tilt)) scale(1); }
+}
+@keyframes introduction-thread { from { opacity:0; stroke-dashoffset:30; } to { opacity:.65; stroke-dashoffset:0; } }
+@media(prefers-reduced-motion:reduce) {
+  .introduction-view[data-phase="open"] .introduction-photo { animation:none; opacity:1; }
+  .introduction-view[data-phase="open"] .introduction-threads path { animation:none; opacity:.65; }
+  .map-viewport[data-introducing="true"] .map-poi, .map-viewport[data-introducing="true"] .map-facility { transition:none; }
+}

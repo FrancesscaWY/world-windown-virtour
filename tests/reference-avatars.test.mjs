@@ -5,9 +5,11 @@ import { GUIDES, companionMarkup } from '../src/components/companion-demo.js';
 import { otterRigMarkup, buildOtterRig } from '../src/components/otter-avatar.js';
 import { dandelionRigMarkup, buildDandelionRig } from '../src/components/dandelion-avatar.js';
 
-test('every selectable guide has exactly one matching render surface and existing guides remain available', () => {
+test('only the two requested artwork guides are selectable, without technical labels or test controls', () => {
   const markup = companionMarkup();
-  assert.deepEqual(Object.keys(GUIDES), ['otter-watercolor', 'dandelion-felt', 'fox-2d', 'fox-3d', 'explorer-2d', 'explorer-3d', 'otter-2d', 'otter-3d', 'dandelion-2d', 'dandelion-3d', '2d', '3d']);
+  assert.deepEqual(Object.keys(GUIDES), ['otter-watercolor', 'dandelion-felt']);
+  assert.deepEqual(Object.values(GUIDES).map(g=>g.name),['沐沐','绒绒']);
+  assert.doesNotMatch(markup,/companion-emotion|companion-action|companion-roam|实现|骨骼|预渲染|水彩|毛毡|2D|3D/);
   const surfaces = new Set();
   for (const [id, guide] of Object.entries(GUIDES)) {
     assert.equal(typeof guide.create, 'function');
@@ -15,7 +17,7 @@ test('every selectable guide has exactly one matching render surface and existin
     surfaces.add(guide.surface);
     const tags = [...markup.matchAll(new RegExp(`<([a-z]+)[^>]*\\bid="${guide.surface}"[^>]*>`, 'g'))];
     assert.equal(tags.length, 1, `${id} must have one mount target`);
-    assert.equal(tags[0][1], guide.tech === '2D' && id !== '2d' ? 'span' : 'canvas');
+    assert.equal(tags[0][1], 'canvas');
     assert.equal(/\shidden(?:\s|>)/.test(tags[0][0]), id !== 'otter-watercolor');
     assert.ok(tags[0][0].includes(guide.name));
   }

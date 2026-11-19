@@ -88,16 +88,16 @@ test('run moves faster than walk and both speeds adapt to the rendered character
   assert.ok(small.distance < walking.distance);
 });
 
-test('character height follows the viewport and caps at 210 pixels while preserving a 3:4 surface', () => {
+test('compact character follows the viewport and caps at 144 pixels while preserving a 3:4 surface', () => {
   const normal = companionSize({ viewportHeight: 800, stageWidth: 1000, availableHeight: 600 });
-  assert.equal(normal.height, 176);
-  assert.equal(normal.width, 132);
+  assert.ok(Math.abs(normal.height - 116) < 1e-9);
+  assert.ok(Math.abs(normal.width - 87) < 1e-9);
   const tall = companionSize({ viewportHeight: 1440, stageWidth: 1000, availableHeight: 1100 });
-  assert.equal(tall.height, 210);
+  assert.equal(tall.height, 144);
   const short = companionSize({ viewportHeight: 420, stageWidth: 320, availableHeight: 300 });
-  assert.equal(short.height, 100);
+  assert.equal(short.height, 80);
   const mobile = companionSize({ viewportHeight: 844, stageWidth: 366, availableHeight: 490 });
-  assert.ok(mobile.height < 190 && mobile.width < 143);
+  assert.ok(mobile.height < 125 && mobile.width < 94);
 });
 
 test('limited stage space further shrinks the character without covering controls or producing invalid sizes', () => {

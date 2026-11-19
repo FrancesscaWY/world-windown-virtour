@@ -1,3 +1,5 @@
+import { callPresentation } from './call-status.js';
+
 /** Present actual capture/playback state without implying that the microphone is open. */
 export function voicePresentation(state, { starting = false } = {}) {
   const active = Boolean(state.voiceSession);
@@ -43,8 +45,14 @@ export function voicePresentation(state, { starting = false } = {}) {
   return result('paused', 'mic-muted', '继续聆听', '已暂停 · 点击继续', 'resume', '聆听已暂停');
 }
 
-/** Auto-start only on entering voice mode, and respect an explicit visitor pause. */
+/** Companion uses the same independent capture/playback session as interactive voice. */
+export function companionVoicePresentation(state) {
+  const call = callPresentation({...state,tourMode:'companion'});
+  return {icon:call.state==='error'?'mic-muted':call.state==='listening'?'listening':'mic',label:call.label,hint:call.hint};
+}
+
+/** Eligibility after the page-level explicit activation gate, not capture consent. */
 export function shouldAutoStartVoice(state, { paused = false, hidden = false, dialogOpen = false } = {}) {
-  const voiceMode = state.tourMode === 'interactive' && state.interactionInput === 'voice' || state.tourMode === 'companion' && !state.companionPaused;
+  const voiceMode = state.tourMode === 'interactive' && state.interactionInput === 'voice';
   return voiceMode && !state.voiceSession && !state.guideError && !state.voiceErrorCode && !['denied', 'restricted'].includes(state.microphoneState) && !paused && !hidden && !dialogOpen;
 }

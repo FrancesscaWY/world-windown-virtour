@@ -31,6 +31,8 @@ export function mountPlannedRoute({ viewport, store, onClear, onFit }) {
   glow.classList.add('route-head-glow'); dot.classList.add('route-head-dot');
   head.append(glow, dot); layer.append(head);
   viewport.querySelector('.map-art').append(layer);
+  const originMark=doc.createElement('span');originMark.className='route-origin-mark';originMark.hidden=true;
+  viewport.querySelector('.map-art').append(originMark);
   const controls = doc.createElement('div');
   controls.className = 'map-route-controls';
   controls.innerHTML = `<span class="map-control-divider" aria-hidden="true"></span><button type="button" class="map-control map-reset" data-route-action="fit" aria-label="查看整条规划路线" title="查看整条规划路线">${icon('compass')}<span>路线</span></button><button type="button" class="map-control" data-route-action="clear" aria-label="清除规划路线" title="清除规划路线">${icon('close')}</button>`;
@@ -98,8 +100,14 @@ export function mountPlannedRoute({ viewport, store, onClear, onFit }) {
     previous = route;
     stopDrawing();
     controls.hidden = !route; label.hidden = !route; layer.style.display = route ? '' : 'none';
-    label.textContent = route ? '手绘路网 · 游览路线示意' : '';
+    label.textContent = route ? `${route.origin?`从${route.origin.name}出发 · `:''}${route.stops.length}站游览` : '';
     label.title = route?.disclaimer ?? '';
+    originMark.hidden=!route?.origin;
+    if(route?.origin){
+      const point=route.origin.roadAnchor.position;
+      originMark.style.left=`${point.x}%`;originMark.style.top=`${point.y}%`;
+      originMark.textContent='起点';originMark.title=`${route.origin.name} · 道路示意连接点`;
+    }
     viewport.dataset.hasRoute = String(Boolean(route));
     draw('');
     for (const marker of markers) {
@@ -133,6 +141,6 @@ export function mountPlannedRoute({ viewport, store, onClear, onFit }) {
   return () => {
     unsubscribe(); stopDrawing();
     reducedMotion?.removeEventListener('change', settleMotion); doc.removeEventListener('visibilitychange', settleMotion);
-    controls.removeEventListener('click', click); controls.remove(); label.remove(); announcement.remove(); layer.remove();
+    controls.removeEventListener('click', click); controls.remove(); label.remove(); announcement.remove(); layer.remove();originMark.remove();
   };
 }

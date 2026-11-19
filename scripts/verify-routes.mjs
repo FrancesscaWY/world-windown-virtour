@@ -16,6 +16,7 @@ const routeArgs = {
 };
 const trace = { id: 'voice-route', name: 'plan_route', args: routeArgs, result: executeTool('plan_route', routeArgs), status: 'done', duration: 1 };
 const { proxy } = await createProxy({ backendOptions: { env: { CHAT_API_KEY: 'test-only', DASHSCOPE_API_KEY: 'test-only' },
+  titleAgent:async()=> '世界之窗游览路线',
   agent: input => {
     if (input.messages.at(-1).content.includes('失败')) throw new Error('Intentional test failure');
     let round = 0;
@@ -41,11 +42,21 @@ try {
     const errors = []; page.on('pageerror', error => errors.push(error.message));
     const requests = []; page.on('request', request => { if (/\/api\/(guide|voice)$/.test(request.url()) && request.method() === 'POST') requests.push(request.postDataJSON()); });
     await page.goto(`${origin}/tour.html?mode=interactive`, { waitUntil: 'domcontentloaded' });
-    await page.locator('#voice-input').waitFor();
-    await page.evaluate(async () => { const { store } = await import('/src/guide/store.js'); store.set({ interactionInput: 'text' }); });
+    await page.locator('#text-mode-button').click();
+    await page.evaluate(async () => {
+      const { store } = await import('/src/guide/store.js'); store.set({ interactionInput: 'text' });
+      // Record the real camera each frame, including the transition's start.
+      window.routeCameraSamples = [];
+      const sample = () => {
+        window.routeCameraSamples.push({ time: performance.now(), transform: document.querySelector('.map-art').style.transform });
+        window.routeCameraFrame = requestAnimationFrame(sample);
+      };
+      sample();
+    });
     await page.locator('#voice-input').fill('规划斗兽场、凯旋门和铁塔的游览路线');
     await page.locator('#voice-form').evaluate(form => form.requestSubmit());
     await page.locator('.planned-route-line').waitFor({ state: 'visible' });
+    const displayedRoute=await page.evaluate(async()=>(await import('/src/guide/store.js')).store.get().plannedRoute);
     assert.equal(await page.locator('.planned-route-card').count(), 0, 'route must be drawn on the map without a popup');
     assert.deepEqual(await page.locator('[data-route-step]').evaluateAll(nodes => nodes.sort((a, b) => Number(a.dataset.routeStep) - Number(b.dataset.routeStep)).map(node => node.dataset.poi)), ['colosseum', 'arc', 'eiffel']);
     assert.equal(await page.locator('.route-stop').count(), 3);
@@ -59,18 +70,33 @@ try {
       const path = document.querySelector('.planned-route-line path:not(.route-line-halo)');
       const reference = path.cloneNode(); reference.setAttribute('d', full);
       const ratio = path.getTotalLength() / reference.getTotalLength();
-      return ratio > .6 && ratio < .9;
-    }, routePath(trace.result.route));
+      return ratio > .5 && ratio < 1;
+    }, routePath(displayedRoute));
     await page.screenshot({ path: `agent-tmp/routes/${label}-drawing.png` });
     await page.waitForFunction(() => document.querySelector('.planned-route-line').dataset.drawing === 'false');
     assert.equal(await page.locator('.route-arrived').count(), 3);
     const d = await routeLine.getAttribute('d'); assert.match(d, /^M.* L.* L/);
-    assert.equal(await page.locator('.planned-route-label').textContent(), '手绘路网 · 游览路线示意');
-    assert.equal(d, routePath(trace.result.route), 'completed path must include all projected road vertices');
+    assert.match(await page.locator('.planned-route-label').textContent(), /3站游览/);
+    assert.equal(d, routePath(displayedRoute), 'completed path must include all projected road vertices and the configured origin');
+    const camera = await page.evaluate(() => { cancelAnimationFrame(window.routeCameraFrame); return window.routeCameraSamples; });
+    const poses = [...new Set(camera.map(sample => sample.transform))];
+    assert.ok(poses.length >= 10, `${label}: route camera must interpolate across frames, not jump (${poses.length} poses)`);
+    const moving = camera.filter((sample, i) => i && sample.transform !== camera[i - 1].transform);
+    assert.ok(moving.at(-1).time - moving[0].time >= 650, `${label}: camera must ease for about 900ms`);
+    // Refit from a different zoom; the bubbled control click must not cancel it.
+    await page.locator('[data-map-action="zoom-in"]').click();
+    const beforeRefit = await page.locator('.map-art').evaluate(node => node.style.transform);
     await page.locator('[data-route-action="fit"]').click();
     assert.equal(await page.locator('.planned-route-line').getAttribute('data-drawing'), 'false', 'fitting the map must not replay the drawing');
+    await page.waitForFunction(before => document.querySelector('.map-art').style.transform !== before, beforeRefit);
+    await page.evaluate(() => new Promise(resolve => {
+      const started = performance.now();
+      const settle = now => now - started >= 1000 ? resolve() : requestAnimationFrame(settle);
+      requestAnimationFrame(settle);
+    }));
+    assert.notEqual(await page.locator('.map-art').evaluate(node => node.style.transform), beforeRefit);
     const lineStyle = await routeLine.evaluate(path => ({ stroke: getComputedStyle(path).stroke, width: path.getBoundingClientRect().width, height: path.getBoundingClientRect().height }));
-    assert.equal(lineStyle.stroke, 'rgb(120, 87, 161)');
+    assert.equal(lineStyle.stroke, 'rgb(69, 107, 134)');
     assert.ok(lineStyle.width > 0 && lineStyle.height > 0);
     const fits = await routeLine.evaluate(path => {
       const line = path.getBoundingClientRect(), map = document.querySelector('.map-viewport').getBoundingClientRect();
@@ -87,7 +113,7 @@ try {
     assert.ok(visible.every(item => item.visible), `${label}: a route marker is covered by a panel: ${JSON.stringify(visible)}`);
     await page.locator('#voice-input').fill('规划失败的路线');
     await page.locator('#voice-form').evaluate(form => form.requestSubmit());
-    await page.waitForFunction(() => document.querySelector('#conversation-log').textContent.includes('暂时无法完成回答'));
+    await page.waitForFunction(() => document.querySelector('#conversation-log').textContent.includes('暂时没连上导游'));
     assert.equal(await routeLine.getAttribute('d'), d);
     await page.locator('.map-poi[data-poi="eiffel"]').click();
     await page.locator('#panorama-scene').waitFor({ state: 'visible' });

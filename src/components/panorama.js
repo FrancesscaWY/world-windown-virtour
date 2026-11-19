@@ -1,5 +1,6 @@
 /** Equirectangular WebGL viewer. Angles use radians, except field of view (degrees). */
 export const PANORAMA_LIMITS = Object.freeze({ minFov: 35, maxFov: 100, maxPitch: 1.48 });
+export const PANORAMA_RENDER_LIMITS = Object.freeze({ maxDpr: 1.5, maxPixels: 2_000_000, maxCubeFace: 2048, maxImageWidth: 4096 });
 const INITIAL_VIEW = Object.freeze({ yaw: 0, pitch: 0.08, fov: 65 });
 const TAU = Math.PI * 2;
 const finite = (value, fallback) => Number.isFinite(value) ? value : fallback;
@@ -47,20 +48,21 @@ export function projectPanoramaHotspot(point, view, viewport) {
 }
 
 /**
- * Returns an idempotent cleanup function with zoomBy(degrees), reset(), getView(),
+ * Returns an idempotent cleanup function with moveTo(view), cancelMove(), zoomBy(degrees), reset(), getView(),
  * projectHotspot({yaw,pitch}) and setOnViewChange(callback). Positive zoomBy zooms out.
  * onStatus receives loading/ready/error/unsupported and an optional reason object.
  */
 export function mountPanorama(canvas, source, onStatus = () => {}) {
   // A panorama can be a regular equirectangular image URL, or a six-face
   // Cubemap. Cubemap face order follows WebGL's +X, -X, +Y, -Y, +Z, -Z axes.
-  const cubemapSources = source?.kind === 'cubemap' && Array.isArray(source.faces) && source.faces.length === 6 ? source.faces : null;
+  let cubemapSources = source?.kind === 'cubemap' && Array.isArray(source.faces) && source.faces.length === 6 ? source.faces : null;
   const isCubemap = Boolean(cubemapSources);
   let disposed = false;
   let contextLost = false;
   let loaded = false;
   let status = 'loading';
-  let view = { ...INITIAL_VIEW };
+  const initialView = normalizePanoramaView(source?.initialView ?? INITIAL_VIEW);
+  let view = { ...initialView };
   let viewListener = null;
   let resources = null;
   let image = null;
@@ -70,11 +72,15 @@ export function mountPanorama(canvas, source, onStatus = () => {}) {
   let timeout = null;
   let gl = null;
   let gesture = null;
+  let flight = null;
+  let renderFrame = null;
+  let size = { width: 0, height: 0 };
   const pointers = new Map();
   const listeners = [];
   const originalTouchAction = canvas.style.touchAction;
   const hadTabindex = canvas.hasAttribute('tabindex');
   const originalTabindex = canvas.getAttribute('tabindex');
+  measureViewport();
 
   function report(next, reason) {
     if (disposed) return;
@@ -82,9 +88,13 @@ export function mountPanorama(canvas, source, onStatus = () => {}) {
     onStatus(next, reason ? { reason } : undefined);
   }
 
-  function viewport() {
+  function measureViewport() {
     const rect = canvas.getBoundingClientRect();
-    return { width: Math.max(0, rect.width), height: Math.max(0, rect.height) };
+    size = { width: Math.max(0, rect.width), height: Math.max(0, rect.height) };
+  }
+
+  function viewport() {
+    return size;
   }
 
   function getView() {
@@ -104,6 +114,8 @@ export function mountPanorama(canvas, source, onStatus = () => {}) {
 
   function cleanup() {
     if (disposed) return;
+    cancelMove();
+    cancelRender();
     disposed = true;
     loaded = false;
     clearTimeout(timeout);
@@ -114,12 +126,16 @@ export function mountPanorama(canvas, source, onStatus = () => {}) {
     }
     pointers.clear();
     if (image) { image.onload = null; image.onerror = null; image.src = ''; }
+    image = null;
     for (const item of images) {
       item.onload = null; item.onerror = null; item.src = '';
     }
     images = [];
+    imageReady = false;
     viewListener = null;
     removeResources();
+    // Keep the reusable context, but do not retain a large hidden drawing buffer.
+    if (gl) { canvas.width = 1; canvas.height = 1; }
     if (canvas.style.touchAction === 'none') canvas.style.touchAction = originalTouchAction;
     if (!hadTabindex && canvas.getAttribute('tabindex') === '0') canvas.removeAttribute('tabindex');
     else if (hadTabindex && canvas.getAttribute('tabindex') === '0') canvas.setAttribute('tabindex', originalTabindex);
@@ -127,14 +143,52 @@ export function mountPanorama(canvas, source, onStatus = () => {}) {
 
   function change(next) {
     if (disposed) return getView();
+    cancelMove();
     view = normalizePanoramaView(next);
     update();
     return getView();
   }
 
+  function cancelMove() {
+    if (!flight) return;
+    const current = flight; flight = null;
+    globalThis.cancelAnimationFrame?.(current.frame);
+    current.resolve(false);
+  }
+
+  function moveTo(next, { duration = 1000 } = {}) {
+    cancelMove();
+    cancelRender();
+    if (disposed || !loaded || contextLost) return Promise.resolve(false);
+    const target = normalizePanoramaView(next);
+    const reduced = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    const ms = reduced ? 0 : clamp(finite(duration, 1000), 0, 3000);
+    if (!ms || !globalThis.requestAnimationFrame) { change(target); return Promise.resolve(true); }
+    const start = { ...view };
+    const deltaYaw = normalizePanoramaView({ yaw: target.yaw - start.yaw }).yaw;
+    return new Promise(resolve => {
+      const current = { resolve, frame: null, started: null }; flight = current;
+      const step = time => {
+        if (flight !== current || disposed) return;
+        current.started ??= time;
+        const progress = Math.min(1, (time - current.started) / ms);
+        const eased = progress * progress * (3 - 2 * progress);
+        view = normalizePanoramaView({ yaw: start.yaw + deltaYaw * eased,
+          pitch: start.pitch + (target.pitch - start.pitch) * eased, fov: start.fov + (target.fov - start.fov) * eased });
+        // The flight already runs on RAF; do not queue a second animation loop.
+        flushUpdate();
+        if (flight !== current) return;
+        if (progress === 1) { flight = null; resolve(true); }
+        else current.frame = requestAnimationFrame(step);
+      };
+      current.frame = requestAnimationFrame(step);
+    });
+  }
+
   Object.assign(cleanup, {
+    moveTo, cancelMove,
     zoomBy: (delta) => change({ ...view, fov: view.fov + finite(delta, 0) }),
-    reset: () => change(INITIAL_VIEW),
+    reset: () => change(initialView),
     getView,
     projectHotspot: (point) => projectPanoramaHotspot(point, view, viewport()),
     setOnViewChange: (callback) => {
@@ -148,8 +202,13 @@ export function mountPanorama(canvas, source, onStatus = () => {}) {
     report('error', 'cubemap-source-invalid');
     return cleanup;
   }
-  try { gl = canvas.getContext('webgl', { antialias: true, alpha: false }); } catch { /* Unsupported contexts may throw. */ }
+  // A full-screen textured quad has no geometry edges to multisample.
+  try { gl = canvas.getContext('webgl', { antialias: false, alpha: false, depth: false, stencil: false }); } catch { /* Unsupported contexts may throw. */ }
   if (!gl) { report('unsupported', 'webgl-unavailable'); return cleanup; }
+  if (isCubemap && Array.isArray(source.mobileFaces) && source.mobileFaces.length === 6 &&
+    (size.width < 768 || gl.getParameter(gl.MAX_CUBE_MAP_TEXTURE_SIZE) < PANORAMA_RENDER_LIMITS.maxCubeFace)) {
+    cubemapSources = source.mobileFaces;
+  }
 
   const vertex = `attribute vec2 position; varying vec2 uv; void main(){uv=(position+1.0)*0.5;gl_Position=vec4(position,0.0,1.0);}`;
   const fragment = isCubemap ? `precision mediump float;
@@ -208,9 +267,10 @@ export function mountPanorama(canvas, source, onStatus = () => {}) {
     if (disposed || contextLost || !loaded || !resources) return;
     const { width, height } = viewport();
     if (!width || !height) return;
-    const dpr = clamp(finite(globalThis.devicePixelRatio, 1), 1, 2);
-    const w = Math.max(1, Math.round(width * dpr));
-    const h = Math.max(1, Math.round(height * dpr));
+    const dpr = Math.min(clamp(finite(globalThis.devicePixelRatio, 1), 1, PANORAMA_RENDER_LIMITS.maxDpr),
+      Math.sqrt(PANORAMA_RENDER_LIMITS.maxPixels / (width * height)));
+    const w = Math.max(1, Math.floor(width * dpr));
+    const h = Math.max(1, Math.floor(height * dpr));
     if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
     gl.viewport(0, 0, w, h);
     gl.useProgram(resources.program);
@@ -224,9 +284,34 @@ export function mountPanorama(canvas, source, onStatus = () => {}) {
   }
 
   function update() {
+    if (disposed || flight) return; // An active flight will draw the latest size/state on its next frame.
+    // Pointer/wheel events may arrive much faster than the screen refresh rate.
+    if (!globalThis.requestAnimationFrame) { flushUpdate(); return; }
+    if (renderFrame !== null) return;
+    renderFrame = requestAnimationFrame(() => { renderFrame = null; flushUpdate(); });
+  }
+
+  function cancelRender() {
+    if (renderFrame !== null) globalThis.cancelAnimationFrame?.(renderFrame);
+    renderFrame = null;
+  }
+
+  function flushUpdate() {
+    cancelRender();
     if (disposed) return;
     draw();
     viewListener?.(getView());
+  }
+
+  function textureImage(input, limit) {
+    const width = input.naturalWidth, height = input.naturalHeight;
+    if (!width || !height || Math.max(width, height) <= limit) return input;
+    const scaled = document.createElement('canvas');
+    const ratio = Math.min(1, limit / Math.max(width, height));
+    scaled.width = Math.max(1, Math.round(width * ratio));
+    scaled.height = Math.max(1, Math.round(height * ratio));
+    scaled.getContext('2d').drawImage(input, 0, 0, scaled.width, scaled.height);
+    return scaled;
   }
 
   function upload() {
@@ -236,11 +321,13 @@ export function mountPanorama(canvas, source, onStatus = () => {}) {
       const target = isCubemap ? gl.TEXTURE_CUBE_MAP : gl.TEXTURE_2D;
       gl.bindTexture(target, resources.texture);
       gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, !isCubemap);
+      const limit = Math.min(isCubemap ? PANORAMA_RENDER_LIMITS.maxCubeFace : PANORAMA_RENDER_LIMITS.maxImageWidth,
+        gl.getParameter(isCubemap ? gl.MAX_CUBE_MAP_TEXTURE_SIZE : gl.MAX_TEXTURE_SIZE));
       if (isCubemap) {
         for (const [index, face] of images.entries()) {
-          gl.texImage2D(gl.TEXTURE_CUBE_MAP_POSITIVE_X + index, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, face);
+          gl.texImage2D(gl.TEXTURE_CUBE_MAP_POSITIVE_X + index, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, textureImage(face, limit));
         }
-      } else gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
+      } else gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, textureImage(image, limit));
       // CLAMP also supports non-power-of-two photographs on WebGL 1.
       gl.texParameteri(target, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
       gl.texParameteri(target, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
@@ -281,6 +368,8 @@ export function mountPanorama(canvas, source, onStatus = () => {}) {
   listen(canvas, 'pointerdown', (event) => {
     if (event.pointerType === 'mouse' && event.button !== 0) return;
     event.preventDefault();
+    cancelMove();
+    cancelRender();
     pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
     gesture = measureGesture();
     try { canvas.setPointerCapture(event.pointerId); canvas.focus({ preventScroll: true }); } catch { /* Capture is an enhancement. */ }
@@ -316,6 +405,7 @@ export function mountPanorama(canvas, source, onStatus = () => {}) {
   });
   listen(canvas, 'webglcontextlost', (event) => {
     event.preventDefault();
+    cancelMove();
     contextLost = true;
     loaded = false;
     pointers.clear();
@@ -332,10 +422,16 @@ export function mountPanorama(canvas, source, onStatus = () => {}) {
       report('error', 'webgl-restore-failed');
     }
   });
+  function resize(entries) {
+    const rect = entries?.[0]?.contentRect;
+    if (rect) size = { width: Math.max(0, rect.width), height: Math.max(0, rect.height) };
+    else measureViewport();
+    update();
+  }
   if (typeof ResizeObserver !== 'undefined') {
-    observer = new ResizeObserver(update);
+    observer = new ResizeObserver(resize);
     observer.observe(canvas);
-  } else if (globalThis.addEventListener) listen(globalThis, 'resize', update);
+  } else if (globalThis.addEventListener) listen(globalThis, 'resize', resize);
   const failImage = () => {
     clearTimeout(timeout);
     imageReady = false;
@@ -352,22 +448,24 @@ export function mountPanorama(canvas, source, onStatus = () => {}) {
     update();
   }, 20000);
   if (isCubemap) {
-    images = cubemapSources.map((url, index) => {
-      const face = new Image();
+    // Create the whole collection before assigning URLs (cached images can load quickly).
+    images = cubemapSources.map(() => new Image());
+    images.forEach((face, index) => {
       face.crossOrigin = 'anonymous';
+      face.decoding = 'async';
       face.onload = () => {
-        if (disposed || !images.every(item => item.complete && item.naturalWidth > 0)) return;
+        if (disposed || imageReady || !images.every(item => item.complete && item.naturalWidth > 0)) return;
         clearTimeout(timeout);
         imageReady = true;
         upload();
       };
       face.onerror = failImage;
-      face.src = url;
-      return face;
+      face.src = cubemapSources[index];
     });
   } else {
     image = new Image();
     image.crossOrigin = 'anonymous';
+    image.decoding = 'async';
     image.onload = () => {
       if (disposed) return;
       clearTimeout(timeout);

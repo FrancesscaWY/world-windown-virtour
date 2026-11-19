@@ -9,7 +9,7 @@ const modeSelectionEntry = isModeSelectionEntry(location.search);
 if (requestedMode !== store.get().tourMode) {
   document.querySelector(`#mode-menu [data-tour-mode="${requestedMode}"]`)?.click();
 }
-if (modeSelectionEntry && requestedMode === 'interactive') store.set({ showConversationStarters:true });
+// Both entries prefer voice UI; choosing a tour mode never requests the microphone.
 
 // Consume the entry marker immediately: refreshes and in-page mode switches
 // are continuations of the same visit, not another first entrance.

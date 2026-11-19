@@ -8,13 +8,16 @@ import { pois } from '../src/data/pois.js';
 import { createStore } from '../src/guide/store.js';
 import { createSpeechService } from '../src/services/speech.js';
 import { getBrowserCapabilities } from '../src/services/capabilities.js';
+import { jpegDimensions } from '../scripts/fetch-assets.mjs';
 
 test('sourced catalog has unique IDs and only exposes the Eiffel cubemap', () => {
   assert.ok(pois.length > 100); assert.equal(new Set(pois.map(poi => poi.id)).size, pois.length);
   assert.deepEqual(pois.filter(poi => poi.panorama).map(poi => poi.id), ['eiffel']);
   const panorama = pois.find(poi => poi.id === 'eiffel').panorama;
   assert.equal(panorama.kind, 'cubemap');
-  assert.deepEqual(panorama.faces.map(path => path.split('/').at(-1)), ['r-l3-fallback.jpg', 'l-l3-fallback.jpg', 'u-l3-fallback.jpg', 'd-l3-fallback.jpg', 'f-l3-fallback.jpg', 'b-l3-fallback.jpg']);
+  for (const [key, size] of [['faces', 2048], ['mobileFaces', 1024]]) {
+    assert.deepEqual(panorama[key].map(path => path.split('/').at(-1)), ['r', 'l', 'u', 'd', 'f', 'b'].map(face => `${face}-${size}.jpg`));
+  }
   assert.equal(pois.find(poi => poi.id === 'eiffel').panoramaKind, 'cubemap');
   assert.match(pois.find(poi => poi.id === 'eiffel').panoramaLabel, /实景全景/);
   for (const poi of pois) {
@@ -24,12 +27,18 @@ test('sourced catalog has unique IDs and only exposes the Eiffel cubemap', () =>
   }
 });
 
-test('Eiffel cubemap includes all six JPEG faces', async () => {
-  const faces = pois.find(poi => poi.id === 'eiffel').panorama.faces;
-  for (const face of faces) {
-    const asset = await readFile(new URL(`../public/${face.slice(2)}`, import.meta.url));
-    assert.equal(asset.subarray(0, 2).toString('hex'), 'ffd8');
-    assert.ok(asset.length > 1_000_000);
+test('Eiffel cubemap derivatives stay within the mobile and desktop download budgets', async () => {
+  const panorama = pois.find(poi => poi.id === 'eiffel').panorama;
+  for (const [key, budget, size] of [['faces', 6_000_000, 2048], ['mobileFaces', 2_000_000, 1024]]) {
+    let bytes = 0;
+    for (const face of panorama[key]) {
+      const asset = await readFile(new URL(`../public/${face.slice(2)}`, import.meta.url));
+      assert.equal(asset.subarray(0, 2).toString('hex'), 'ffd8');
+      assert.ok(asset.length > 10_000);
+      assert.deepEqual(jpegDimensions(asset), { width: size, height: size });
+      bytes += asset.length;
+    }
+    assert.ok(bytes < budget, `${key} uses ${bytes} bytes`);
   }
 });
 

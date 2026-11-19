@@ -13,10 +13,11 @@ import { createChatJournal, diagnosticError } from './chat-log.ts';
 import type { ChatJournal, ChatOutcome } from './chat-log.ts';
 import { guidePayload, validPcm } from './guide.ts';
 import { abortable, createTurn } from './lifecycle.ts';
-import { readPublicOrigins, isAllowedOrigin } from './origin.ts';
 import { registerRealtime } from './realtime.ts';
 import { createRealtimeBridge } from './ai/realtime.ts';
 import type { AgentEvent, ModelConfig } from './ai/types.ts';
+import { generateConversationTitle } from './ai/conversation-title.ts';
+import { createWebSearch } from './ai/web-search.ts';
 
 export interface AppOptions {
   env?: NodeJS.ProcessEnv;
@@ -29,6 +30,7 @@ export interface AppOptions {
   agent?: typeof runAgent;
   voiceAgent?: typeof runVoice;
   ttsAgent?: typeof runTts;
+  titleAgent?: typeof generateConversationTitle;
   realtimeBridge?: typeof createRealtimeBridge;
   guideTimeoutMs?: number;
   voiceTimeoutMs?: number;
@@ -42,12 +44,12 @@ const guideSchema = { type: 'object', required: ['text'], properties: { text: { 
 const voiceSchema = { type: 'object', required: ['audio'], properties: { audio: { type: 'string', minLength: 4268, maxLength: 2560000 }, context: contextSchema }, additionalProperties: true };
 
 export function createApp({ env = process.env, config = initialConfig(env), root, dist = false, serveStatic = true, logger = false, https,
-  agent = runAgent, voiceAgent = runVoice, ttsAgent = runTts, realtimeBridge = createRealtimeBridge, guideTimeoutMs = 60000, voiceTimeoutMs = 120000, ttsTimeoutMs = 120000 }: AppOptions = {}) {
+  agent = runAgent, voiceAgent = runVoice, ttsAgent = runTts, titleAgent=generateConversationTitle, realtimeBridge = createRealtimeBridge, guideTimeoutMs = 60000, voiceTimeoutMs = 120000, ttsTimeoutMs = 120000 }: AppOptions = {}) {
   const app = Fastify({ logger, ...(https ? { https } : {}), bodyLimit: 65536, requestTimeout: 150000, forceCloseConnections: true,
     ajv: { customOptions: { coerceTypes: false, removeAdditional: false } } });
   const serve = createHandler({ root, dist });
-  const publicOrigins = readPublicOrigins(env);
-  registerRealtime(app as unknown as import('fastify').FastifyInstance, { env, provider: config.audio, bridge: realtimeBridge });
+  const webSearch=createWebSearch({apiKey:env.TAVILY_API_KEY});
+  registerRealtime(app as unknown as import('fastify').FastifyInstance, { env, provider: config.audio, bridge: realtimeBridge, webSearch });
   let active = 0;
   const controllers = new Set<AbortController>();
   const reportChatLogFailure = (requestId: string, message: string) => {
@@ -85,12 +87,7 @@ export function createApp({ env = process.env, config = initialConfig(env), root
         });
       } catch { reportChatLogFailure(request.id, 'Chat journal could not be created; chat continues'); }
     }
-    const allowed = request.headers['sec-fetch-site'] !== 'cross-site' && isAllowedOrigin(request.headers.origin, request.headers.host, publicOrigins);
-    if (!allowed) {
-      chatLogs.get(request)?.journal.record({ type: 'request.rejected', code: 'CROSS_ORIGIN_DENIED' });
-      return reply.code(403).send({ error: 'CROSS_ORIGIN_DENIED', message: '不允许跨站访问导览 API。' });
-    }
-    if (request.method === 'POST' && ['/api/guide', '/api/voice', '/api/tts'].includes(request.url.split('?')[0]) && !/^application\/json(?:\s*;|$)/i.test(request.headers['content-type'] || '')) {
+    if (request.method === 'POST' && ['/api/guide', '/api/voice', '/api/tts','/api/conversations/title'].includes(request.url.split('?')[0]) && !/^application\/json(?:\s*;|$)/i.test(request.headers['content-type'] || '')) {
       chatLogs.get(request)?.journal.record({ type: 'request.rejected', code: 'UNSUPPORTED_MEDIA_TYPE' });
       return reply.code(415).send({ error: 'UNSUPPORTED_MEDIA_TYPE', message: '请使用 JSON 提交问题。' });
     }
@@ -123,6 +120,22 @@ export function createApp({ env = process.env, config = initialConfig(env), root
     panorama: 'eiffel-demo-illustration', realParkPanorama: 'unavailable', photography: 'local-park-photos', catalog: 'sourced-partial-inventory',
   }));
 
+  app.post<{Body:{messages:{role:'user'|'assistant';content:string}[]}}>('/api/conversations/title',{schema:{body:{
+    type:'object',required:['messages'],additionalProperties:false,properties:{messages:{type:'array',minItems:1,maxItems:8,items:{
+      type:'object',required:['role','content'],additionalProperties:false,properties:{role:{type:'string',enum:['user','assistant']},content:{type:'string',minLength:1,maxLength:1400}},
+    }}},
+  }}},async(request,reply)=>{
+    if(!config.text.apiKey)return reply.code(503).send({error:'TITLE_UNAVAILABLE'});
+    if(active>=3)return reply.code(429).send({error:'BUSY'});
+    const turn=createTurn(request,reply,12000);controllers.add(turn.controller);active++;
+    try{
+      const title=await abortable(()=>titleAgent({provider:config.text,messages:request.body.messages,signal:turn.controller.signal}),turn.controller.signal);
+      if(typeof title!=='string' || !title.trim() || title.length>24 || /[\r\n<>]/.test(title))throw new Error('Invalid title');
+      return {title};
+    }catch{return reply.code(502).send({error:'TITLE_UNAVAILABLE'});}
+    finally{turn.cleanup();controllers.delete(turn.controller);active--;}
+  });
+
   app.post<{ Body: GuideRequest }>('/api/guide', { schema: { body: guideSchema }, bodyLimit: 65536 }, async (request, reply) => {
     const log = chatLogs.get(request);
     const payload = guidePayload(request.body);
@@ -140,7 +153,7 @@ export function createApp({ env = process.env, config = initialConfig(env), root
     const turn = createTurn(request, reply, guideTimeoutMs);
     controllers.add(turn.controller); active++;
     try {
-      const result = await abortable(() => agent({ ...payload, provider: config.text, signal: turn.controller.signal,
+      const result = await abortable(() => agent({ ...payload, provider: config.text, signal: turn.controller.signal, webSearch,
         onEvent: event => log?.journal.record(event), onDiagnostic: event => log?.journal.record(event) }), turn.controller.signal);
       if (!result.content?.trim()) throw new Error('EMPTY_ANSWER');
       log?.journal.record({ type: 'answer', ...result });
@@ -156,7 +169,7 @@ export function createApp({ env = process.env, config = initialConfig(env), root
         log.journal.record({ type: 'request.error', outcome: log.outcome, error: log.result.error,
           ...(turn.controller.signal.aborted ? { abortReason: diagnosticError(turn.controller.signal.reason) } : {}) });
       }
-      return reply.code(timeout ? 504 : 502).send({ error: timeout ? 'GUIDE_TIMEOUT' : 'GUIDE_UNAVAILABLE', message: timeout ? '导游回答超时，请稍后重试；仍可用本地指令浏览景点。' : '导游后端暂时无法完成回答，请检查模型配置；仍可用本地指令浏览景点。' });
+      return reply.code(timeout ? 504 : 502).send({ error: timeout ? 'GUIDE_TIMEOUT' : 'GUIDE_UNAVAILABLE', message: timeout ? '这次回答有点慢，稍后再试试；地图可以继续逛。' : '暂时没连上导游，稍后再试试；地图可以继续逛。' });
     } finally {
       turn.cleanup(); controllers.delete(turn.controller); active--;
       if (log) log.handling = false;
@@ -187,7 +200,7 @@ export function createApp({ env = process.env, config = initialConfig(env), root
     emit({ type: 'status', message: '正在连接 Qwen 原生语音模型…' });
     void (async () => {
       try {
-        const result = await abortable(() => voiceAgent({ ...guidePayload(request.body), audio: request.body.audio,
+        const result = await abortable(() => voiceAgent({ ...guidePayload(request.body), audio: request.body.audio, webSearch,
           provider: config.audio, onEvent: emit, signal: turn.controller.signal }), turn.controller.signal);
         if (!result.content?.trim()) throw new Error('EMPTY_ANSWER');
         emit({ type: 'answer', ...result, model: config.audio.model });
@@ -231,7 +244,7 @@ export function createApp({ env = process.env, config = initialConfig(env), root
 
   app.setNotFoundHandler(async (request, reply) => {
     const path = request.url.split('?')[0];
-    if (path.startsWith('/api/')) return reply.code(['/api/guide', '/api/voice', '/api/tts', '/api/status', '/api/tools', '/api/health'].includes(path) ? 405 : 404).send({ error: 'NOT_FOUND_OR_METHOD_NOT_ALLOWED' });
+    if (path.startsWith('/api/')) return reply.code(['/api/guide', '/api/voice', '/api/tts', '/api/status', '/api/tools', '/api/health','/api/conversations/title'].includes(path) ? 405 : 404).send({ error: 'NOT_FOUND_OR_METHOD_NOT_ALLOWED' });
     if (!serveStatic) return reply.code(404).send({ error: 'NOT_FOUND' });
     const response = await serve(new Request(new URL(request.url, 'http://localhost'), { method: request.method }));
     return reply.code(response.status).headers(Object.fromEntries(response.headers)).send(response.body ? Buffer.from(await response.arrayBuffer()) : null);

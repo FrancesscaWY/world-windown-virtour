@@ -1,6 +1,8 @@
 import { pois, getPoi, getHotspot, detailSections } from '../data/pois.js';
 import { resolveLocalIntent } from './intent.js';
-import { toolEffect } from './tool-effects.js';
+import { guideVisualEffect, introductionEffect } from './tool-effects.js';
+import { synchronizedTour } from './panorama-narration.js';
+import { messageId, messageSource, messagePoiIds, messageReferences, visualNavigationAllowed } from './message-media.js';
 
 import { facilityResult, facilities } from '../data/facilities.js';
 
@@ -28,10 +30,11 @@ export function createGuideController({ store, actions, speech, resolveIntent = 
   const offered = new Set();
   let lastProactiveAt = -Infinity;
   const appliedTools = new Set();
+  let allowVisuals=true;
 
   const current = token => !disposed && token === generation;
-  function appendMessage(role, text) {
-    const row = { role, text, content: text };
+  function appendMessage(role, text,metadata={}) {
+    const row = { id:messageId(),role, text, content:text,createdAt:Date.now(),source:messageSource(store.get()),...metadata };
     const messages = [...store.get().messages, row].slice(-MESSAGE_LIMIT);
     store.set({ messages });
     return row;
@@ -43,13 +46,15 @@ export function createGuideController({ store, actions, speech, resolveIntent = 
     pendingRequest = null;
     generation += 1;
     appliedTools.clear();
+    allowVisuals=true;
     speech?.stop?.();
-    store.set({ guideStatus: 'idle', guideError: null, pendingNarration: null, speechCharIndex: null, narrationCue: null, suggestions: [], sessionId: generation });
+    store.set({ guideStatus: 'idle', guideError: null, pendingNarration: null, cameraTour: null, cameraSentence: null, speechCharIndex: null, narrationCue: null, suggestions: [], sessionId: generation });
     return generation;
   }
 
   function speak(text, token, { poiId = null, requiresScene = false, optional = false } = {}) {
     if (!current(token)) return;
+    if (synchronizedTour(store.get())) return;
     lastNarration = { text, poiId, requiresScene };
     if (['connecting', 'connected'].includes(store.get().callState)) return;
     if (store.get().tourMode === 'immersive' || (store.get().tourMode === 'interactive' && store.get().interactionInput === 'text') || (store.get().tourMode === 'companion' && store.get().companionPaused)) return;
@@ -68,10 +73,13 @@ export function createGuideController({ store, actions, speech, resolveIntent = 
     });
   }
 
-  function reply(text, token, { aloud = true, patch = {}, poiId = null, requiresScene = false, optional = false } = {}) {
+  function reply(text, token, { aloud = true, patch = {}, poiId = null, poiIds=poiId?[poiId]:[], references=[], requiresScene = false, optional = false } = {}) {
     if (!current(token)) return false;
-    store.set({ guideText: text, guideStatus: 'idle', pendingNarration: null, ...patch });
-    appendMessage('assistant', text);
+    const sync = synchronizedTour(store.get());
+    store.set({ guideText: sync && store.get().cameraSentence ? store.get().guideText : text,
+      guideStatus: sync ? store.get().guideStatus : 'idle', pendingNarration: null, ...patch });
+    if (!sync || store.get().interactionInput === 'text' || store.get().tourMode === 'immersive')
+      appendMessage('assistant', text,{poiIds,references});
     if (aloud) speak(text, token, { poiId, requiresScene, optional });
     return true;
   }
@@ -93,7 +101,7 @@ export function createGuideController({ store, actions, speech, resolveIntent = 
     const text = openingNarration(poi);
     if (state.tourMode === 'companion') {
       actions.showMap();
-      return reply(text, token, { poiId:id, patch:{ selectedPoiId:id, mentionedPoiId:id, lastIntent:{type:'open-poi'}, clarification:null, visitInfo:null, recommendedPoiIds:[] } });
+      return reply(text, token, { poiId:id, patch:{ ...introductionEffect(id), selectedPoiId:id, mentionedPoiId:id, lastIntent:{type:'open-poi'}, clarification:null, visitInfo:null, recommendedPoiIds:[] } });
     }
     const repeated = narrated.has(id) && !force;
     lastNarration = { text, poiId: id, requiresScene: Boolean(poi.panorama || poi.photo) };
@@ -124,9 +132,9 @@ export function createGuideController({ store, actions, speech, resolveIntent = 
     const hotspot = getHotspot(id, intent.hotspotId);
     if (intent.hotspotId && !hotspot) return reply('没有找到这个画面细节，可以先看看景点详情。', token, { patch: { clarification: null } });
     if (state.selectedPoiId !== id) { sceneReadyId = null; actions.selectPoi(id); }
-    if (state.tourMode === 'companion') actions.showMap();
+    if (state.tourMode === 'companion') { actions.showMap(); store.set(introductionEffect(id) ?? {}); }
     else actions.showDetails(hotspot?.id ?? null);
-    const text = hotspot ? `${hotspot.title}：${hotspot.body} 这是原创测试画面。` : `${poi.name}：${(detailSections[id] ?? []).map(part => part.text).join('\n\n') || poi.summary}`;
+    const text = hotspot ? `${hotspot.title}：${hotspot.body}` : `${poi.name}：${(detailSections[id] ?? []).map(part => part.text).join('\n\n') || poi.summary}`;
     return reply(text, token, { poiId: id, patch: { mentionedPoiId: id, lastIntent: { type: 'details' }, clarification: null, recommendedPoiIds: [], visitInfo: null } });
   }
 
@@ -176,9 +184,11 @@ export function createGuideController({ store, actions, speech, resolveIntent = 
     if (!current(token) || !Array.isArray(traces)) return;
     for (const trace of traces) {
       if (!trace?.id || appliedTools.has(trace.id)) continue;
-      const patch = toolEffect(trace);
+      const state=store.get(),patch = guideVisualEffect(trace,state);
       if (!patch) continue;
       appliedTools.add(trace.id);
+      if(!allowVisuals && ['get_attraction_guidance','introduce_view','get_detailed_attraction_guidance','move_camera'].includes(trace.name))continue;
+      if(['get_attraction_guidance','introduce_view','get_detailed_attraction_guidance'].includes(trace.name) && synchronizedTour(state) && state.selectedPoiId===patch.selectedPoiId)continue;
       sceneReadyId = null;
       store.set(patch);
     }
@@ -189,7 +199,7 @@ export function createGuideController({ store, actions, speech, resolveIntent = 
     switch (intent?.type) {
       case 'answer':
         applyToolTraces(intent.traces, token);
-        return reply(intent.text, token, { patch: { mode: intent.mode, guideModel: intent.model ?? null, guideTraces: intent.traces ?? [], clarification: null, visitInfo: null } });
+        return reply(intent.text, token, { poiIds:messagePoiIds(intent.traces),references:messageReferences(intent.traces),patch: { mode: intent.mode, guideModel: intent.model ?? null, guideTraces: intent.traces ?? [], clarification: null, visitInfo: null } });
       case 'service-error': return reply(intent.text, token, { aloud: false, patch: { guideError: intent.text, mode: 'local-rules', guideModel: null, guideTraces: [] } });
       case 'facility': return showFacilities(intent.kind, intent.id ?? null, token);
       case 'open-poi': return open(intent.poiId, token, intent.forceNarration);
@@ -230,7 +240,8 @@ export function createGuideController({ store, actions, speech, resolveIntent = 
           signal: request.signal,
           onTranscript(text) {
             if (!current(token)) return;
-            transcript = text;
+             transcript = text;
+             allowVisuals=visualNavigationAllowed(text);
             store.set({ currentTranscript: text, messages: store.get().messages.map(message => message === row ? { ...row, text, content: text } : message) });
             const intent = resolveLocalIntent(text, context);
             if (intent.type === 'stop') {
@@ -252,15 +263,17 @@ export function createGuideController({ store, actions, speech, resolveIntent = 
               store.set({ mentionedPoiId: intent.poiId });
             }
           },
-          onStart() { if (current(token)) { audioStarted = true; store.set({ guideStatus: 'speaking' }); } },
+          onStart() { if (current(token) && !synchronizedTour(store.get())) { audioStarted = true; store.set({ guideStatus: 'speaking' }); } },
           onToolEnd(trace) { applyToolTraces([trace], token); },
           onAnswer(event) {
             if (!current(token)) return;
             applyToolTraces(event.traces, token);
             answer = event;
-            lastNarration = { text: event.content, poiId: null, requiresScene: false };
-            store.set({ guideText: event.content, guideModel: event.model ?? null, guideTraces: event.traces ?? [], guideStatus: audioStarted ? 'speaking' : 'preparing' });
-            appendMessage('assistant', event.content);
+            const sync = synchronizedTour(store.get()), suppressed = sync || event.audioSuppressed;
+            if (!suppressed) lastNarration = { text: event.content, poiId: null, requiresScene: false };
+            store.set({ guideText: suppressed ? store.get().guideText : event.content,
+              guideModel: event.model ?? null, guideTraces: event.traces ?? [], guideStatus: suppressed ? store.get().guideStatus : audioStarted ? 'speaking' : 'preparing' });
+            if (!suppressed) appendMessage('assistant', event.content,{poiIds:messagePoiIds(event.traces),references:messageReferences(event.traces)});
           },
         });
         if (stopped) return { status: 'executed', intent: 'stop' };
@@ -268,14 +281,14 @@ export function createGuideController({ store, actions, speech, resolveIntent = 
         pendingRequest = null;
         if (result.status === 'cancelled') { store.set({ guideStatus: 'idle' }); return { status: 'cancelled' }; }
         if (result.status !== 'success') throw new Error('后端已返回字幕，但没有成功播放语音，请点击导游重试。');
-        store.set({ guideStatus: 'idle', currentTranscript: transcript, guideError: null });
+        store.set({ guideStatus: synchronizedTour(store.get()) ? store.get().guideStatus : 'idle', currentTranscript: transcript, guideError: null });
         return { status: 'executed', intent: 'answer' };
       } catch (error) {
         if (stopped) return { status: 'executed', intent: 'stop' };
         if (!current(token)) return { status: 'cancelled' };
         pendingRequest = null;
         const message = error.name === 'TimeoutError' ? '语音回答超时，请稍后重试。' : error.message || '语音回答失败，请稍后重试。';
-        if (answer) store.set({ guideStatus: 'idle', guideError: message });
+        if (answer) store.set({ guideStatus: 'idle', guideError: message, cameraTour: null });
         else reply(message, token, { aloud: false, patch: { guideError: message } });
         return { status: 'error' };
       }
@@ -286,6 +299,7 @@ export function createGuideController({ store, actions, speech, resolveIntent = 
       if (!text || !/[\p{L}\p{N}]/u.test(text)) return { status: 'empty' };
       const context = store.get();
       const token = begin();
+      allowVisuals=visualNavigationAllowed(text);
       appendMessage('user', text);
       store.set({ currentTranscript: text, guideStatus: 'thinking', mode: 'local-rules' });
       let intent;
@@ -321,6 +335,24 @@ export function createGuideController({ store, actions, speech, resolveIntent = 
       if (id && !facilities.some(item => item.id === id)) return false;
       const token = begin(); return token !== null && showFacilities(kind, id, token);
     },
+    // Browsing controls do not manufacture conversational turns or speech.
+    browseFacilities(kind, id = null) {
+      if (id && !facilities.some(item => item.id === id)) return false;
+      begin(); sceneReadyId = null; actions.showMap();
+      store.set({ facilityInfo:kind === 'all' ? null : facilityResult(kind,id), introductionView:null, nearbyView:null, mentionedPoiId:null, recommendedPoiIds:[], visitInfo:null, clarification:null });
+      return true;
+    },
+    browsePoi(id) {
+      if (!getPoi(id)) return false;
+      begin(); sceneReadyId = null; actions.selectPoi(id); actions.showMap();
+      store.set({ facilityInfo:null, introductionView:null, nearbyView:null, mentionedPoiId:id, recommendedPoiIds:[], visitInfo:null, clarification:null });
+      return true;
+    },
+    browseMap() { begin(); sceneReadyId = null; actions.showMap(); store.set({facilityInfo:null}); },
+    browseHotspot(id) {
+      if (!getHotspot(store.get().selectedPoiId,id)) return false;
+      begin(); actions.showDetails(id); return true;
+    },
     retryScene(id) { sceneReadyId = null; narrated.delete(id); const token = begin(); return token !== null && open(id, token, true); },
     openPoi(id) { const token = begin(); return token !== null && open(id, token); },
     openPoiWithDetails(id) {
@@ -343,7 +375,7 @@ export function createGuideController({ store, actions, speech, resolveIntent = 
       if (!poi || disposed) return false;
       const token = begin();
       actions.showMap();
-      return reply(`你已来到${poi.name}。${poi.summary}`, token, { poiId: id, patch: { selectedPoiId: id, mentionedPoiId: id, facilityInfo: null } });
+      return reply(`你已来到${poi.name}。${poi.summary}`, token, { poiId: id, patch: { ...introductionEffect(id), selectedPoiId: id, mentionedPoiId: id, facilityInfo: null } });
     },
     showDetails(hotspotId = null) {
       const state = store.get();

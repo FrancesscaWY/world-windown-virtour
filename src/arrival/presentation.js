@@ -11,7 +11,7 @@ export function isArrivalNavigation(event, link, currentHref) {
 }
 
 /** A short exit cannot queue two navigations or strand a page restored from bfcache. */
-export function mountPageTransitions(root, { host = window, navigate = href => host.location.assign(href), duration = 260 } = {}) {
+export function mountPageTransitions(root, { host = window, navigate = href => host.location.assign(href), duration = 360 } = {}) {
   let timer = null, pending = false, selected = null, disposed = false;
   const reset = () => {
     if (timer !== null) host.clearTimeout(timer);
@@ -24,12 +24,19 @@ export function mountPageTransitions(root, { host = window, navigate = href => h
     if (disposed || pending) return false;
     pending = true;
     selected = card;
+    const destination = new URL(href, host.location.href);
+    if (destination.href === host.location.href) { reset(); return false; }
+    const rank = url => url.pathname.endsWith('/tour.html') ? 2 : url.pathname.endsWith('/modes.html') ? 1 : 0;
+    root.style?.setProperty('--arrival-slide', rank(destination) < rank(new URL(host.location.href)) ? '-100%' : '100%');
     const finish = () => {
       timer = null;
       try { navigate(href); } catch (error) { reset(); throw error; }
     };
-    if (host.matchMedia('(prefers-reduced-motion: reduce)').matches) finish();
+    const reduced = host.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const nativeTransition = 'onpageswap' in host && host.CSS?.supports('view-transition-name', 'root');
+    if (nativeTransition || reduced) finish();
     else {
+      try { host.sessionStorage?.setItem('arrival-transition', JSON.stringify({ from:host.location.href, to:destination.href, time:Date.now() })); } catch { /* Optional fallback. */ }
       selected?.classList.add('is-selected');
       root.classList.add('is-leaving');
       timer = host.setTimeout(finish, duration);

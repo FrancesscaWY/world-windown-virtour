@@ -1,0 +1,21 @@
+/* Real document snapshots slide together instead of fading through a blank page. */
+@view-transition { navigation:auto; }
+:root { --arrival-slide:100%; }
+::view-transition-group(root) { animation-duration:.38s; }
+::view-transition-old(root), ::view-transition-new(root) {
+  animation-duration:.38s;
+  animation-timing-function:cubic-bezier(.22,.7,.2,1);
+  mix-blend-mode:normal;
+}
+::view-transition-old(root) { animation-name:arrival-slide-out; }
+::view-transition-new(root) { animation-name:arrival-slide-in; }
+@keyframes arrival-slide-out { to { transform:translateX(calc(-1 * var(--arrival-slide))); } }
+@keyframes arrival-slide-in { from { transform:translateX(var(--arrival-slide)); } }
+/* Progressive fallback for browsers without cross-document View Transitions. */
+.arrival.is-leaving main { animation:arrival-slide-out .36s cubic-bezier(.22,.7,.2,1) both; pointer-events:none; }
+.arrival-incoming main { animation:arrival-slide-in .36s cubic-bezier(.22,.7,.2,1) both; }
+@media(prefers-reduced-motion:reduce) {
+  @view-transition { navigation:none; }
+  ::view-transition-group(root), ::view-transition-old(root), ::view-transition-new(root) { animation:none !important; }
+  .arrival.is-leaving main, .arrival-incoming main { animation:none !important; }
+}

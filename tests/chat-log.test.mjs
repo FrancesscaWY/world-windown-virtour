@@ -91,14 +91,14 @@ test('model failures and timeouts retain diagnostic details only on the server',
   }
 });
 
-test('invalid, unconfigured and cross-origin requests have rejected summaries', async t => {
+test('invalid and unconfigured requests have rejected summaries regardless of Origin', async t => {
   const root = await temp(t), app = createApp({ env: { CHAT_LOG_DIR: root } });
   t.after(() => app.close());
   for (const [options, status] of [
     [{ payload: { text: '' } }, 400],
     [{ payload: '{', headers: { 'content-type': 'application/json' } }, 400],
     [{ payload: { text: '有效问题' } }, 503],
-    [{ payload: { text: '跨站问题' }, headers: { origin: 'https://attacker.example', 'sec-fetch-site': 'cross-site' } }, 403],
+    [{ payload: { text: '跨站问题' }, headers: { origin: 'https://attacker.example', 'sec-fetch-site': 'cross-site' } }, 503],
   ]) assert.equal((await app.inject({ method: 'POST', url: '/api/guide', ...options })).statusCode, status);
   await app.close();
   const chats = await listChats(root);

@@ -4,21 +4,27 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#fbf5e9" />
-    <meta name="description" content="世界之旅，AI 伴游。和窗小游一起，从深圳世界之窗开启一次水彩般的漫游。" />
-    <title>世界之旅 · AI 伴游</title>
-    <link rel="icon" href="./assets/favicon.svg" type="image/svg+xml" />
+    <meta name="description" content="欢迎来到深圳世界之窗。选择交互模式或伴游模式，让 AI 陪你探索园区里的世界风景。" />
+    <title>世界之窗 · 深圳 · virtour</title>
+    <link rel="icon" href="./assets/brand-favicon.png" type="image/png" sizes="32x32" />
+    <link rel="apple-touch-icon" href="./assets/brand-touch-icon.png" sizes="180x180" />
     <link rel="stylesheet" href="./assets/arrival/pages.css" />
+    <link rel="stylesheet" href="./assets/arrival/transitions.css" />
+    <link rel="stylesheet" href="./assets/arrival/flow.css" />
+    <script src="./assets/arrival/transitions.js"></script>
+    <link rel="prefetch" href="./modes.html" />
     <link rel="preload" as="image" href="./assets/arrival/welcome-guide.png" />
     <link rel="preload" as="image" href="./assets/arrival/welcome-landmarks.png" />
   </head>
   <body class="arrival arrival-welcome" data-page="welcome">
     <main class="welcome-page" id="welcome-page" aria-labelledby="welcome-title">
       <header class="arrival-masthead">
-        <span class="arrival-location"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="4" ry="9"/><path d="M3 12h18M5 6.5h14M5 17.5h14"/></svg>深圳 · 世界之窗</span>
+        <a class="arrival-brand" href="./index.html" aria-label="世界之窗 · 深圳 · virtour 首页"><img src="./assets/brand-logo.png" width="38" height="38" alt="VirTour 系统图标" /><span>世界之窗<span>深圳 · virtour</span></span></a>
+        <span class="arrival-location">深圳 · 南山</span>
       </header>
-      <section class="welcome-scene" aria-label="和窗小游开启旅程">
+      <section class="welcome-scene" aria-label="开启深圳世界之窗之旅">
         <img class="welcome-wash" src="./assets/arrival/welcome-background.png" width="1000" height="701" alt="" draggable="false" />
-        <h1 class="welcome-title" id="welcome-title" aria-label="世界之旅，AI 伴游"><img class="welcome-title-main" src="./assets/arrival/welcome-title-main.png" width="117" height="534" alt="世界之旅，AI 伴游" draggable="false" /><img class="welcome-title-companion" src="./assets/arrival/welcome-title-companion.png" width="134" height="384" alt="" draggable="false" /></h1>
+        <h1 class="welcome-title" id="welcome-title"><span class="welcome-title-main">世界之窗</span><span class="welcome-title-companion"><span>AI</span><span>伴游</span></span></h1>
         <div class="welcome-world">
           <div class="world-halo" aria-hidden="true"></div>
           <svg class="world-route" viewBox="0 0 500 520" fill="none" aria-hidden="true">
@@ -33,16 +39,16 @@
         </div>
         <div class="welcome-mascot">
           <span class="mascot-shadow" aria-hidden="true"></span>
-          <button class="welcome-guide" type="button" aria-label="和窗小游打个招呼" title="点点我，打个招呼">
-            <img src="./assets/arrival/welcome-guide.png" width="264" height="332" alt="窗小游戴着探险帽、围着绿色围巾，挥手欢迎你" fetchpriority="high" draggable="false" />
+          <button class="welcome-guide" type="button" aria-label="和沐沐打个招呼" title="点点我，打个招呼">
+            <img src="./assets/arrival/welcome-guide.png" width="264" height="332" alt="沐沐戴着探险帽、围着绿色围巾，挥手欢迎你" fetchpriority="high" draggable="false" />
             <span class="mascot-spark mascot-spark-one" aria-hidden="true">✦</span><span class="mascot-spark mascot-spark-two" aria-hidden="true">✧</span>
           </button>
         </div>
-        <div class="welcome-greeting"><span><span id="welcome-message" aria-live="polite">你好，我是窗小游</span><span class="greeting-dot" aria-hidden="true"></span></span></div>
+        <span id="welcome-message" class="arrival-sr-only" aria-live="polite"></span>
       </section>
       <footer class="welcome-footer">
-        <a class="welcome-enter" id="welcome-enter" href="./modes.html" aria-label="左滑或点击，选择游览模式"><span class="welcome-invitation">左滑，开启旅程</span><span class="welcome-arrow-disc" aria-hidden="true"><svg class="welcome-arrows" viewBox="0 0 36 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="m10 6-6 6 6 6m10-12-6 6 6 6m10-12-6 6 6 6"/></svg></span></a>
-        <div class="arrival-progress" aria-label="第 1 步，共 2 步"><span class="is-current"></span><span></span></div>
+        <a class="welcome-enter" id="welcome-enter" data-swipe-link href="./modes.html" aria-label="左滑或点击，选择游览模式"><span class="welcome-invitation">左滑，出发</span><span class="welcome-arrow-disc" aria-hidden="true"><svg class="welcome-arrows" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="m15 5-7 7 7 7"/></svg></span></a>
+        <nav class="arrival-progress" aria-label="欢迎与模式选择"><a class="is-current" href="./index.html" aria-label="欢迎页" aria-current="page"></a><a data-swipe-link href="./modes.html" aria-label="选择游览模式"></a></nav>
       </footer>
     </main>
     <script type="module" src="/src/welcome-page.js"></script>

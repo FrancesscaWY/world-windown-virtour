@@ -132,11 +132,12 @@ test('text agent receives actual document evidence with citations, not just a st
     assert.equal(evidence.results[0].citation, 'WOW:eiffel-scale');
     assert.match(evidence.results[0].content, /1:3/);
     assert.match(evidence.disclaimer, /未独立核验/);
-    return { choices: [{ message: { content: '文档记载园内铁塔按1:3仿建。[WOW:eiffel-scale]' } }] };
+    return { choices: [{ message: { content: '园内铁塔按巴黎埃菲尔铁塔的1:3比例仿建。' } }] };
   } });
-  assert.match(result.content, /WOW:eiffel-scale/);
+  assert.match(result.content, /1:3/);
+  assert.doesNotMatch(result.content, /文档|WOW:/);
   assert.equal(result.traces[0].status, 'done');
-  assert.match(systemPrompt, /2026-11-12/); assert.match(systemPrompt, /url为空/);
+  assert.match(systemPrompt, /2026-11-12/); assert.match(systemPrompt, /不编造官方背书、内部文件路径或未核验结论/);
 });
 
 const docx = xml => zipSync({ 'word/document.xml': strToU8(xml) });

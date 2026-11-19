@@ -58,6 +58,8 @@ export function summarizeCall(rows, summary = {}) {
     answerParts.set(key, part);
   }
   const benign = new Set(rows.filter(r => r.event.type === 'cancel.race_ignored').map(r => r.event.eventId));
+  const benignProviderEvents = new Set(rows.filter(r => r.event.type === 'cancel.race_ignored')
+    .map(r => r.event.providerEventId).filter(id => typeof id === 'string'));
   return {
     callId: summary.callId ?? rows[0]?.callId, status: summary.complete === true ? 'closed-and-saved' : summary.complete === false ? 'incomplete' : 'ongoing-or-unfinalized',
     startedAt: summary.startedAt ?? rows[0]?.at, endedAt: summary.endedAt, reason: summary.reason, model: summary.model,
@@ -106,7 +108,8 @@ export function summarizeCall(rows, summary = {}) {
     localSpeechEvents: diagnostics.filter(e => ['vad_started', 'vad_stopped'].includes(e.name)).map(e => ({
       type: e.name, clientMs: e.clientMs, boundarySample: e.details.boundarySample, boundaryClientMs: e.details.boundaryClientMs,
     })),
-    errors: rows.filter(r => r.event.type === 'error' && !benign.has(r.event.error?.event_id)).map(r => ({ source: r.source, event: r.event })),
+    errors: rows.filter(r => r.event.type === 'error' && !(r.source === 'provider.in'
+      && (benign.has(r.event.error?.event_id) || benignProviderEvents.has(r.event.event_id)))).map(r => ({ source: r.source, event: r.event })),
     suspectedSpokenToolText: [...new Set(rows.filter(r => r.source === 'browser.out' && r.event.type === 'answer'
       && /\btools?\b|search_knowledge_base|plan_route|plan_itinerary|get_attraction_\w+|search_attractions|estimate_budget|function_call|工具调用|调用.{0,20}工具/i.test(r.event.text)).map(r => r.event.responseId))],
     timingNote: 'Client metrics use one monotonic browser clock. VAD boundaries are estimates, not physical acoustic measurements. Check the input WAV and actual conversation before accepting.',

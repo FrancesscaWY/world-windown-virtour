@@ -89,7 +89,7 @@ try {
   });
   await page.goto(`${origin}/tour.html?mode=interactive`, { waitUntil: 'domcontentloaded' });
   await page.evaluate(async () => { window.__store = (await import('/src/guide/store.js')).store; });
-  await page.locator('#live-call-button').click();
+  await page.locator('#call-retry').click();
   await page.waitForFunction(() => window.__store.get().callState === 'connected');
   if (live) {
     await page.evaluate(recording => window.__inject(recording), recordings.question);
@@ -101,11 +101,13 @@ try {
       await new Promise(resolve => { source.onended = resolve; source.start(); });
     }, name);
     assert.equal(await page.evaluate(() => window.__sent.filter(e => e.type === 'barge_in').length), 0, 'piano cues must not trigger speech');
+    await page.locator('#call-options-button').click();
     await page.locator('#call-mute').click();
     await page.evaluate(recording => window.__inject(recording), recordings.followup);
     await page.evaluate(() => window.__inputDone);
     assert.equal(await page.evaluate(() => window.__sent.filter(e => e.type === 'barge_in').length), 0, 'muted recording must not trigger speech');
     await page.locator('#call-mute').click();
+    await page.locator('#call-options-button').click();
     respond('old');
   }
   await page.waitForFunction(() => window.__playout.length > 0, null, { timeout: 60000 });
@@ -148,6 +150,6 @@ try {
   await mkdir('agent-tmp/calls', { recursive: true });
   await writeFile(`agent-tmp/calls/latency-${live ? 'live' : 'fixture'}.json`, JSON.stringify(result, null, 2) + '\n');
   await page.screenshot({ path: `agent-tmp/calls/latency-${live ? 'live' : 'fixture'}.png` });
-  await page.locator('#live-call-button').click();
+  await page.locator('#call-end').click();
   console.log(JSON.stringify(result, null, 2));
 } finally { for (const timer of timers) clearTimeout(timer); await browser?.close(); await proxy.close(); }

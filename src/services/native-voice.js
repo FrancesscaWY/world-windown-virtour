@@ -81,7 +81,7 @@ export function createNativeVoiceService({ browserSpeech, scope = globalThis, fe
     const chunks = [];
     const abortPlayback = () => playback?.stop();
     combined.addEventListener('abort', abortPlayback, { once: true });
-    let player = null, answer = null;
+    let player = null, answer = null, guided = false;
     try {
       if (!await unlock()) throw new Error('请点击麦克风以允许播放后端语音。');
       if (combined.aborted) return { status: 'cancelled' };
@@ -91,11 +91,18 @@ export function createNativeVoiceService({ browserSpeech, scope = globalThis, fe
       answer = await consumeVoiceStream(response, event => {
         if (combined.aborted) return;
         if (event.type === 'input_transcript' && typeof event.transcript === 'string') onTranscript(event.transcript);
-        if (event.type === 'audio_delta' && typeof event.audio === 'string') { chunks.push(event.audio); player.append(event.audio); }
-        if (event.type === 'answer') onAnswer(event);
-        if (event.type === 'tool_end') onToolEnd(event.trace);
+        if (event.type === 'audio_delta' && typeof event.audio === 'string' && !guided) { chunks.push(event.audio); player.append(event.audio); }
+        if (event.type === 'answer') onAnswer(guided ? { ...event, audioSuppressed: true } : event);
+        if (event.type === 'tool_end') {
+          const trace = event.trace;
+          if (trace?.name === 'move_camera' && trace.status === 'done' && trace.result?.status === 'success' && trace.result.sync_mode === 'sentence') {
+            guided = true; player.stop();
+          }
+          onToolEnd(trace);
+        }
       });
       if (combined.aborted) return { status: 'cancelled' };
+      if (guided) return { status: 'success', answer };
       cached = { text: answer.content, chunks };
       player.seal();
       const result = await player.done;

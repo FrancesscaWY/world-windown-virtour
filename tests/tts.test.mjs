@@ -56,14 +56,14 @@ test('Aliyun rejects errors, incomplete streams, empty audio and malformed PCM',
   await assert.rejects(runTts({ text: '你好', provider, signal: controller.signal, onEvent() {}, fetchImpl: () => assert.fail('aborted synthesis reached upstream') }));
 });
 
-test('TTS API requires configuration, same-origin JSON and bounded plain text', async t => {
+test('TTS API requires configuration, JSON and bounded plain text regardless of Origin', async t => {
   const app = createApp({ env: {}, ttsAgent: () => assert.fail('invalid request reached TTS') }); t.after(() => app.close());
   const post = (payload, headers) => app.inject({ method: 'POST', url: '/api/tts', payload, headers });
   assert.equal((await post({ text: '你好' })).statusCode, 503);
   assert.equal((await app.inject('/api/status')).json().localNarrationTts, 'unavailable');
   for (const payload of [{}, { text: '' }, { text: ' ' }, { text: 1 }, { text: '字'.repeat(4001) }, { text: '你好', voice: 'forged' }]) assert.equal((await post(payload)).statusCode, 400);
   assert.equal((await post('你好', { 'content-type': 'text/plain' })).statusCode, 415);
-  assert.equal((await post({ text: '你好' }, { origin: 'https://evil.example' })).statusCode, 403);
+  assert.equal((await post({ text: '你好' }, { origin: 'https://evil.example' })).statusCode, 503);
   assert.equal((await app.inject('/api/tts')).statusCode, 405);
 });
 
@@ -139,6 +139,20 @@ test('cloud narration drives mouth and sentence cues on playback time, not recei
   f.context.currentTime = .14; f.fire(); assert.deepEqual(boundaries, [0, 3]);
   f.nodes[0].onended(); await tick(); assert.equal(settled, false);
   f.nodes[1].onended(); assert.equal((await pending).status, 'success'); assert.equal(f.timers.size, 0);
+});
+
+test('sentence callbacks wait for the output latency and never advance while the audio clock is suspended', async () => {
+  const f = playbackFixture(async () => ndjson([audioEvent(), audioEvent(3), { type: 'answer', content: '你好。再见。' }]));
+  const boundaries = [];
+  f.context.outputLatency = .1;
+  const pending = f.service.speak('你好。再见。', { onBoundary(index) { boundaries.push(index); } });
+  await tick();
+  f.context.currentTime = .04; f.fire(); assert.deepEqual(boundaries, [], 'queued samples have not reached the speaker');
+  f.context.state = 'suspended'; f.context.currentTime = .15; f.fire(); assert.deepEqual(boundaries, []);
+  f.context.state = 'running'; f.fire(); assert.deepEqual(boundaries, [0]);
+  f.context.currentTime = .25; f.fire(); assert.deepEqual(boundaries, [0, 3]);
+  for (const node of f.nodes) node.onended();
+  assert.equal((await pending).status, 'success');
 });
 
 test('stop cancels pending fetch immediately and late audio cannot revive playback', async () => {

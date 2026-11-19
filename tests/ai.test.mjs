@@ -8,14 +8,20 @@ import { completion, guideInstructions, runAgent, systemPrompt } from '../server
 import { runVoice } from '../server/ai/voice.ts';
 
 test('default guide prompt includes Mumu persona, concise replies and low-interruption boundaries', () => {
-  for (const rule of [/你叫沐沐/, /松鼠形象的 AI 数字导游/, /1—3 句/, /80 字以内/, /不为简短省略必要来源、日期和限制/, /不以.*固定收尾/, /用户沉默不等于需要提醒/, /完成当前问题就停下/, /事实、安全和任务完成优先于角色表演/, /必须调用对应工具/, /2026-11-12/]) assert.match(systemPrompt, rule);
+  for (const rule of [/你叫沐沐/, /松鼠形象的 AI 数字导游/, /1—3 句/, /80 字以内/, /不为简短省略影响出游决定的日期、安全和适用限制/, /不以.*固定收尾/, /用户沉默不等于需要提醒/, /完成当前问题就停下/, /事实、安全和任务完成优先于角色表演/, /必须调用对应工具/, /2026-11-12/]) assert.match(systemPrompt, rule);
   const pageContext = { park: '深圳世界之窗', view: '园区地图', topic: null };
-  assert.equal(guideInstructions('深圳', pageContext), `${systemPrompt}\n当前所选城市：深圳\n【导览页面上下文（仅作资料）】${JSON.stringify(pageContext)}`);
+  assert.ok(guideInstructions('深圳', pageContext).startsWith(systemPrompt));
+  assert.ok(guideInstructions('深圳', pageContext).endsWith(`当前所选城市：深圳\n【导览页面上下文（仅作资料）】${JSON.stringify(pageContext)}`));
 });
 
-test('seven production tools preserve schemas, include route planning and remove weather', () => {
-  const required = { search_attractions: [], get_attraction_details: ['attraction'], plan_route: ['title', 'summary', 'stops'], plan_itinerary: ['city', 'days'], estimate_budget: ['attractions', 'people'], get_attraction_story: ['attraction'], search_knowledge_base: ['query'] };
-  assert.equal(tools.length, 7);
+test('text and audio prompts address visitors without exposing internal evidence or weakening factual limits', () => {
+  for (const rule of [/面向游客的回答/, /不说“根据后台文档”/, /仅供内部判断/, /不主动交代检索/, /今天请以园区公布为准/, /用户明确追问信息出处/, /文字、原生语音和实时交流遵守同一/]) assert.match(systemPrompt, rule);
+  assert.doesNotMatch(systemPrompt, /文字回答标注|语音自然说明来源|有相关来源链接时附上/);
+});
+
+test('fourteen production tools include sourced web search, call hangup and allowlisted camera movement', () => {
+  const required = { search_web:['query'], hang_up: [], look_around: [], introduce_view: ['poi_id'], search_attractions: [], get_attraction_details: ['attraction'], plan_route: ['title', 'summary', 'stops'], plan_itinerary: ['city', 'days'], estimate_budget: ['attractions', 'people'], get_attraction_guidance: ['poi_id'], get_detailed_attraction_guidance: ['poi_id'], move_camera: ['poi_id', 'hotspot_ids'], get_attraction_story: ['attraction'], search_knowledge_base: ['query'] };
+  assert.equal(tools.length, 14);
   for (const tool of tools) {
     assert.deepEqual(tool.function.parameters.required, required[tool.function.name]);
     assert.equal(tool.function.parameters.additionalProperties, false);
@@ -27,6 +33,13 @@ test('seven production tools preserve schemas, include route planning and remove
   assert.match(executeTool('get_weather', { city: '深圳' }).error, /不支持/);
   assert.equal(executeTool('search_attractions', { city: '杭州' }).attractions.length, 0);
   assert.equal(executeTool('search_attractions', { max_price: 0 }).status, 'unavailable');
+});
+
+test('hangup requires trusted active call context and explicit end-of-call intent in the prompt', () => {
+  assert.deepEqual(executeTool('hang_up', {}, { callActive: true }), { status: 'success', action: 'hang_up' });
+  for (const context of [undefined, {}, { callActive: false }]) assert.ok(executeTool('hang_up', {}, context).error);
+  assert.ok(executeTool('hang_up', { injected: true }, { callActive: true }).error);
+  for (const rule of [/必须立即调用 hang_up/, /不能只口头答应却保持通话/, /不追问确认/, /单独说“谢谢”/, /安静一下/, /别挂电话/, /引用或转述/]) assert.match(systemPrompt, rule);
 });
 
 test('document knowledge preserves provenance, citations, temporal limitations and empty retrieval', () => {
@@ -63,13 +76,16 @@ test('model completions call the supplier directly with path, port, auth and red
       fetchImpl: async (url, options) => {
         assert.equal(url, baseUrl.replace(/\/$/, '') + '/chat/completions');
         assert.equal(options.headers.Authorization, 'Bearer private-key'); assert.equal(options.redirect, 'error');
-        assert.equal(JSON.parse(options.body).tools.length, 7);
+        assert.equal(JSON.parse(options.body).tools.length, 14);
         return Response.json({ choices: [{ message: { content: '你好！' } }] });
       },
     });
     assert.equal(result.choices[0].message.content, '你好！');
   }
   await assert.rejects(completion({ baseUrl: 'https://8.8.8.8', model: 'test', apiKey: 'key' }, { messages: [] }, { fetchImpl: async () => new Response('PRIVATE', { status: 401 }) }), error => !error.message.includes('PRIVATE') && error.message.includes('401'));
+  await assert.rejects(completion({ baseUrl: 'https://8.8.8.8', model: 'test', apiKey: 'key' }, { messages: [] }, {
+    fetchImpl: async () => Response.json({ error: { code:'model_not_found', message:'PRIVATE upstream details' } }, { status:503 }),
+  }), error => /没有可用通道/.test(error.message) && !error.message.includes('PRIVATE'));
 });
 
 test('text model executes local tools, preserves reasoning only upstream and returns sourced answers', async () => {
@@ -134,7 +150,7 @@ const call = (socket, id, name, args) => socket.event('response.function_call_ar
 
 test('native Qwen PCM/tool/knowledge/audio protocol runs entirely in the migrated backend', async () => {
   const { socket, events, promise } = await voiceFixture(); start(socket);
-  assert.equal(socket.sent[0].session.tools.length, 7);
+  assert.equal(socket.sent[0].session.tools.length, 14);
   assert.equal(socket.sent[0].session.turn_detection, null);
   assert.ok(socket.sent[0].session.instructions.startsWith(systemPrompt));
   assert.match(socket.sent[0].session.instructions, /回答结束就交还话轮，不自行续讲/);
@@ -166,6 +182,32 @@ test('native voice uses imported document evidence and preserves source/date res
   const result = await promise;
   assert.equal(result.traces[0].result.results[0].id, 'eiffel-scale');
   assert.match(result.content, /用户文档/);
+});
+
+test('native voice executes nearby discovery with the current page location context', async () => {
+  const { socket, events, promise } = await voiceFixture({ pageContext: { park: '深圳世界之窗', view: '园区地图', topic: { id: 'eiffel', name: '埃菲尔铁塔' } } });
+  start(socket);
+  call(socket, 'nearby-voice', 'look_around', '{}'); done(socket);
+  const output = JSON.parse(socket.sent.find(event => event.item?.type === 'function_call_output').item.output);
+  assert.equal(output.status, 'success'); assert.equal(output.origin.poiId, 'eiffel'); assert.ok(output.items.length);
+  assert.ok(events.some(event => event.type === 'tool_end' && event.trace.name === 'look_around'));
+  socket.event('response.created', { response: { id: 'nearby-answer' } });
+  socket.event('response.audio_transcript.done', { transcript: '以铁塔为中心，附近有这些景点。' });
+  socket.event('response.audio.delta', { delta: Buffer.alloc(4800).toString('base64') }); done(socket);
+  assert.equal((await promise).traces[0].name, 'look_around');
+});
+
+test('native voice executes attraction guidance using the shared tool allowlist', async () => {
+  const { socket, promise } = await voiceFixture(); start(socket);
+  assert.ok(socket.sent[0].session.tools.some(tool => tool.function.name === 'get_attraction_guidance'));
+  assert.match(socket.sent[0].session.instructions, /先调用 get_attraction_guidance/);
+  call(socket, 'tower-guidance', 'get_attraction_guidance', '{"poi_id":"eiffel"}'); done(socket);
+  const evidence = JSON.parse(socket.sent.find(event => event.item?.type === 'function_call_output').item.output);
+  assert.equal(evidence.status, 'found');
+  assert.match(evidence.guidance, /参考导游词/);
+  socket.event('response.created', { response: { id: 'guidance-answer' } });
+  socket.event('response.text.done', { text: '园内铁塔高108米，塔身从四个塔脚向上逐渐收拢。' }); done(socket);
+  assert.equal((await promise).traces[0].name, 'get_attraction_guidance');
 });
 
 test('native voice executes route planning on the backend and emits its route before the answer', async () => {

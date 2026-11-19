@@ -7,7 +7,7 @@ export function createTourActions(store, beforeSceneChange = () => {}) {
       if (!getPoi(id)) return false;
       if (store.get().selectedPoiId !== id) {
         beforeSceneChange();
-        store.set({ selectedPoiId: id, view: 'map', detailsOpen: false, activeHotspotId: null });
+        store.set({ selectedPoiId: id, view: 'map', detailsOpen: false, activeHotspotId: null, cameraTour: null, introductionView: null, nearbyView: null });
       }
       return true;
     },
@@ -16,19 +16,19 @@ export function createTourActions(store, beforeSceneChange = () => {}) {
       if (!poi) return false;
       beforeSceneChange();
       if (!poi.panorama && !poi.photo) {
-        store.set({ selectedPoiId: id, view: 'map', detailsOpen: false, activeHotspotId: null });
+        store.set({ selectedPoiId: id, view: 'map', detailsOpen: false, activeHotspotId: null, cameraTour: null, introductionView: null, nearbyView: null });
         return false;
       }
-      store.set({ selectedPoiId: id, view: poi.panorama ? 'panorama' : 'photo', detailsOpen: false, activeHotspotId: null });
+      store.set({ selectedPoiId: id, view: poi.panorama ? 'panorama' : 'photo', detailsOpen: false, activeHotspotId: null, cameraTour: null, introductionView: null, nearbyView: null });
       return true;
     },
     showMap() {
       beforeSceneChange();
-      store.set({ view: 'map', detailsOpen: false, activeHotspotId: null });
+      store.set({ view: 'map', detailsOpen: false, activeHotspotId: null, cameraTour: null, introductionView: null, nearbyView: null });
     },
     showDetails(hotspotId = null) {
       if (hotspotId && !getHotspot(store.get().selectedPoiId, hotspotId)) return false;
-      store.set({ detailsOpen: false, activeHotspotId: hotspotId });
+      store.set({ detailsOpen: false, activeHotspotId: hotspotId, cameraTour: null });
       return true;
     },
     closeDetails() { store.set({ detailsOpen: false, activeHotspotId: null }); },

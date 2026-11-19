@@ -59,4 +59,4 @@ try {
   reset();
   await infer(new Float32Array(512), epoch); // Warm the runtime before the call is connected.
   reset(); self.postMessage({ type: 'ready' });
-} catch { failed = true; self.postMessage({ type: 'error' }); }
+} catch (error) { failed = true; self.postMessage({ type: 'error', message: String(error?.message ?? error).slice(0, 500) }); }

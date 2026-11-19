@@ -14,8 +14,14 @@ export interface Message { role: 'user' | 'assistant'; content: string }
 export interface PageContext {
   park: string;
   view: string;
-  topic: { name: string; summary: string; source: string } | null;
+  /** Set only by the server's persistent call bridge, never accepted from page input. */
+  callActive?: boolean;
+  tourMode?: 'interactive' | 'companion';
+  locationSource?: 'device' | 'simulated';
+  topic: { id?: string; name: string; summary: string; source: string } | null;
+  visitorPosition?: { latitude: number; longitude: number } | null;
   route?: { stops: { id: string; name: string }[] } | null;
+  panorama?: { poiId: string; activeHotspot: { id: string; title: string } | null } | null;
 }
 export type ToolOutput = Record<string, unknown> & { error?: string };
 export interface Trace {
@@ -37,6 +43,7 @@ export type AgentEvent =
   | { type: 'error'; error: string; code: string };
 export interface AgentResult { content: string; traces: Trace[]; usage?: { total_tokens: number } }
 export interface AgentInput {
+  webSearch?: import('./web-search.ts').WebSearch;
   messages: Message[];
   city: string;
   pageContext?: PageContext;

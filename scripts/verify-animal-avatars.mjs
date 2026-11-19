@@ -13,32 +13,27 @@ const guides = [
   { id: 'dandelion-felt', surface: '#companion-dandelion-felt' },
 ];
 
-async function choice(page, menu, label) {
-  await page.locator(`#companion-${menu}`).click();
-  const option = page.locator(`#companion-${menu}-options`).getByRole('option', { name: label, exact: true });
-  await option.click();
-}
-
 async function readMotion(page) {
-  return page.locator('#companion-pet').evaluate(pet => ({ x: pet.getBoundingClientRect().x, y: pet.getBoundingClientRect().y, height: pet.getBoundingClientRect().height, moving: pet.dataset.moving, action: pet.dataset.motionAction }));
+  return page.locator('#companion-pet').evaluate(pet => ({ x: pet.getBoundingClientRect().x, y: pet.getBoundingClientRect().y, height: pet.getBoundingClientRect().height, moving: pet.dataset.moving, action: pet.dataset.motionAction, mapMoving:pet.dataset.mapMoving, active:document.activeElement?.id, menu:document.querySelector('#companion-guide').getAttribute('aria-expanded'),hidden:document.hidden,zoom:document.querySelector('.map-zoom').textContent }));
 }
 
 try {
   for (const viewport of [{ width: 390, height: 844 }, { width: 1440, height: 900 }]) {
     const page = await browser.newPage({ viewport });
     const errors = [];
-    page.on('pageerror', error => errors.push(error.message));
+    page.on('pageerror', error => { errors.push(error.message); console.error('avatar browser error:',error.message); });
     page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
     await page.goto(`${process.env.DEMO_URL || 'http://127.0.0.1:5174'}/tour.html`);
     await page.waitForFunction(() => document.querySelector('#companion-pet')?.dataset.mode === 'otter-watercolor');
     assert.equal(await page.locator('.guide-name strong').textContent(), '沐沐');
-    assert.equal(await page.locator('#companion-guide [data-choice-value]').textContent(), '沐沐 · 水彩');
+    assert.equal(await page.locator('#companion-guide [data-choice-value]').textContent(), '沐沐');
     assert.equal(await page.locator('#companion-otter-watercolor').isVisible(), true);
-    await page.locator('#companion-roam').uncheck();
+    assert.equal(await page.locator('#companion-roam,#companion-emotion,#companion-action').count(),0);
     for (const guide of guides) {
       await page.locator('#companion-guide').click();
       const list = page.locator('#companion-guide-options');
-      assert.equal(await list.getByRole('option').count(), 12, 'preserve every existing guide');
+      assert.equal(await list.getByRole('option').count(), 2, 'only the two requested artwork guides');
+      assert.deepEqual(await list.getByRole('option').allTextContents(),['沐沐','绒绒']);
       const option = list.locator(`[data-avatar-mode="${guide.id}"]`);
       await option.scrollIntoViewIfNeeded();
       assert.equal(await option.evaluate(element => {
@@ -47,8 +42,9 @@ try {
       }), true, 'the character cannot intercept its menu');
       await option.click();
       await page.waitForFunction(id => document.querySelector('#companion-pet')?.dataset.mode === id && document.querySelector('#companion-pet')?.getAttribute('aria-busy') === 'false', guide.id);
-      await choice(page, 'emotion', '自然');
       await page.emulateMedia({ reducedMotion: 'reduce' });
+      await page.locator('[data-map-action="reset"]').click();
+      await page.evaluate(async()=>{const {store}=await import('/src/guide/store.js');store.set({recommendedPoiIds:[]});});
       await page.waitForTimeout(160);
       const neutral = await page.locator(guide.surface).screenshot({ path: new URL(`${viewport.width}-${guide.id}-neutral.png`, output).pathname });
       const painted = await page.locator(guide.surface).evaluate(canvas => {
@@ -58,25 +54,32 @@ try {
       });
       assert.ok(painted.count > 10000);
       assert.ok(painted.corners.every(alpha => alpha === 0), 'remove the original rectangular background');
-      for (const label of ['开心', '好奇', '关切']) {
-        await choice(page, 'emotion', label); await page.waitForTimeout(120);
-        assert.equal(neutral.equals(await page.locator(guide.surface).screenshot()), false, `${guide.id}/${label} changes the actual rendered pixels`);
+      for (const guideStatus of ['listening','speaking']) {
+        // State fixture, not a real microphone/model request. Expression controls
+        // are gone: actual listening/playback state now selects the expression.
+        await page.evaluate(async guideStatus=>{const {store}=await import('/src/guide/store.js');store.set({guideStatus});},guideStatus);
+        await page.waitForTimeout(120);
+        assert.equal(neutral.equals(await page.locator(guide.surface).screenshot()), false, `${guide.id}/${guideStatus} changes the actual rendered pixels`);
       }
-      await choice(page, 'emotion', '自然');
+      await page.evaluate(async()=>{const {store}=await import('/src/guide/store.js');store.set({guideStatus:'idle'});});
       await page.emulateMedia({ reducedMotion: 'no-preference' });
-      await choice(page, 'action', '行走');
-      const before = await readMotion(page); await page.waitForTimeout(400); const after = await readMotion(page);
-      assert.ok(Math.abs(after.x - before.x) > 5, 'walking has real displacement');
+      await page.evaluate(async()=>{const {store}=await import('/src/guide/store.js');store.set({recommendedPoiIds:['eiffel']});});
+      await page.waitForFunction(()=>document.querySelector('#companion-pet').dataset.mapMoving==='true');
+      const before = await readMotion(page);
+      await page.waitForFunction(before=>{const pet=document.querySelector('#companion-pet'),r=pet.getBoundingClientRect();return pet.dataset.moving==='true' && Math.hypot(r.x-before.x,r.y-before.y)>5;},before);
+      const after = await readMotion(page);
+      assert.ok(Math.hypot(after.x - before.x,after.y-before.y) > 5, `map-led walking has real displacement: ${JSON.stringify({guide:guide.id,viewport,before,after})}`);
       assert.equal(after.moving, 'true'); assert.equal(after.action, 'walk');
       assert.ok(after.height <= 211);
       await page.locator('#companion-pet').focus(); await page.keyboard.press('ArrowUp');
-      await page.waitForTimeout(100); const placed = await readMotion(page);
+      await page.waitForFunction(()=>document.querySelector('#companion-pet').dataset.moving==='false');
+      const placed = await readMotion(page);
       await page.waitForTimeout(250); const stable = await readMotion(page);
       assert.ok(Math.abs(stable.x - placed.x) < 1 && Math.abs(stable.y - placed.y) < 1);
-      assert.equal(stable.moving, 'false'); assert.equal(stable.action, 'idle');
-      for (const label of ['招手', '指景', '自然']) { await choice(page, 'action', label); await page.waitForTimeout(120); }
+      assert.equal(stable.moving, 'false',JSON.stringify({guide:guide.id,viewport,placed,stable}));
+      assert.equal(stable.action, 'idle');
       await page.screenshot({ path: new URL(`${viewport.width}-${guide.id}-page.png`, output).pathname });
-      results.push({ viewport, guide: guide.id, preservedChoices: 12, painted, displacement: after.x - before.x, dragStops: true, expressions: true, actions: true });
+      results.push({ viewport, guide: guide.id, choices: 2, painted, displacement: after.x - before.x, dragStops: true, automaticExpressions: true, removedTestControls: true });
     }
     assert.deepEqual(errors, [], 'no browser errors');
     await page.close();
@@ -91,7 +94,7 @@ try {
     const review = document.createElement('div'); review.id = 'animal-art-review';
     review.style.cssText = 'position:fixed;inset:0;z-index:1000;display:flex;align-items:center;justify-content:center;gap:30px;background:#faf5e9;color:#70583b;font:18px serif';
     document.body.append(review); window.artReviewModels = [];
-    for (const [label, create] of [['水彩水獭 · 原画骨骼', createWatercolorOtter], ['毛毡蒲公英 · 原画图集', createFeltDandelion]]) {
+    for (const [label, create] of [['沐沐', createWatercolorOtter], ['绒绒', createFeltDandelion]]) {
       const figure = document.createElement('figure'); figure.style.cssText = 'margin:0;text-align:center';
       const canvas = document.createElement('canvas'); canvas.style.cssText = 'width:360px;height:480px;display:block';
       const caption = document.createElement('figcaption'); caption.textContent = label; caption.style.marginTop = '14px';

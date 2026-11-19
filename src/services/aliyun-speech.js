@@ -60,10 +60,11 @@ export function createAliyunSpeechService(scope = globalThis) {
               if (event.charIndex === lastIndex) return;
               lastIndex = event.charIndex;
               const cue = () => {
-                if (context.state === 'running' && context.currentTime * 1000 >= timing.startTimeMs) onBoundary(event.charIndex);
-                else schedule(cue, 20);
+                 const heardTimeMs = (context.currentTime - (context.outputLatency || context.baseLatency || 0)) * 1000;
+                 if (context.state === 'running' && heardTimeMs >= timing.startTimeMs) onBoundary(event.charIndex);
+                 else schedule(cue, 20);
               };
-              schedule(cue, Math.max(0, timing.startTimeMs - context.currentTime * 1000));
+              schedule(cue, Math.max(0, timing.startTimeMs - (context.currentTime - (context.outputLatency || context.baseLatency || 0)) * 1000));
             });
             if (current.done) return;
             player.seal();

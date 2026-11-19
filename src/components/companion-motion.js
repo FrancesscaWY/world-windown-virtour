@@ -3,9 +3,9 @@ const finite = (value, fallback = 0) => Number.isFinite(value) ? value : fallbac
 
 /** A screen companion is an overlay, so its size follows the viewport rather than map zoom. */
 export function companionSize({ viewportHeight, stageWidth, availableHeight }) {
-  const preferredHeight = clamp(finite(viewportHeight) * .22, 100, 210);
+  const preferredHeight = clamp(finite(viewportHeight) * .145, 80, 144);
   // Leave room for the map and controls even on short or narrow displays.
-  const height = Math.max(0, Math.min(preferredHeight, finite(availableHeight) * .58, Math.max(0, finite(stageWidth) - 24) * 4 / 3));
+  const height = Math.max(0, Math.min(preferredHeight, finite(availableHeight) * .42, Math.max(0, finite(stageWidth) - 24) * 4 / 3));
   return { width: height * .75, height };
 }
 

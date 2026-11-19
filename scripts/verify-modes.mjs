@@ -1,3 +1,8 @@
+// LEGACY pre-map-first UI matrix: auto-microphone entry, 4:6 panes and pause/play
+// controls are no longer the product contract. Not a current acceptance suite.
+// Current replacements: verify-home, verify-map-interactions, verify-companion-voice
+// and verify-calls. Keep the older scenarios for migration reference only.
+console.warn('LEGACY verification: use verify-home.mjs, verify-map-interactions.mjs, verify-companion-voice.mjs and verify-calls.mjs instead.');
 import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { mkdir } from 'node:fs/promises';

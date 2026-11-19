@@ -102,15 +102,23 @@ test('each landmark is one native map entrance and only the message send button 
   }
 });
 
-test('map search and quick categories form one unique top navigation area', () => {
+test('search and mode stay in the header; labeled voice/text entrances form an independent lower bar', () => {
   const header = nodes.find(node => node.tag === 'header' && node.attrs.class === 'app-header');
   const search = byId.get('open-catalog');
   const categories = byId.get('top-categories');
   assert.ok(header);
   assert.ok(under(search, header));
-  assert.ok(under(categories, header));
+  const launcher=nodes.find(node=>node.attrs.class==='interaction-launcher');
+  assert.ok(launcher);assert.ok(under(byId.get('mode-button'),header));
+  for(const id of ['voice-form','call-info','guide-picker'])assert.ok(under(byId.get(id),launcher),`${id} belongs to the same lower dock`);
+  assert.equal(byId.has('map-selection'),false,'no second step before entering a scene');
+  for(const id of ['live-call-button','text-mode-button']){
+    assert.ok(!under(byId.get(id),header));assert.ok(under(byId.get(id),launcher));
+  }
+  assert.ok(!under(categories, header));
+  assert.ok(under(categories, nodes.find(node => node.attrs.class === 'tour-workspace')));
   assert.equal(nodes.filter(node => node.attrs.id === 'open-catalog').length, 1);
-  assert.deepEqual(nodes.filter(node => Object.hasOwn(node.attrs, 'data-top-facility-kind')).map(node => node.attrs['data-top-facility-kind']), ['all','food','toilets','service','gate']);
+  assert.deepEqual(nodes.filter(node => Object.hasOwn(node.attrs, 'data-top-facility-kind')).map(node => node.attrs['data-top-facility-kind']), ['all','food','toilets','other']);
 });
 
 test('details preserve real photo attribution and show explicit 360 coverage gaps where needed', () => {

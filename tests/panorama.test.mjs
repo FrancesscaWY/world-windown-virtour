@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mountPanorama, normalizePanoramaView, projectPanoramaHotspot, PANORAMA_LIMITS } from '../src/components/panorama.js';
+import { mountPanorama, normalizePanoramaView, projectPanoramaHotspot, PANORAMA_LIMITS, PANORAMA_RENDER_LIMITS } from '../src/components/panorama.js';
 
 const near = (actual, expected, tolerance = 1e-8) => assert.ok(Math.abs(actual - expected) < tolerance, `${actual} ≈ ${expected}`);
 
@@ -32,7 +32,7 @@ test('spherical hotspots track camera rotation and viewport aspect, hiding the b
   assert.equal(projectPanoramaHotspot({ yaw: NaN, pitch: 0 }, camera, viewport).visible, false);
 });
 
-function fixture(t, supported = true) {
+function fixture(t, supported = true, source = '/test-sphere.png', textureLimit = 8192) {
   const calls = [];
   const gl = new Proxy({ NO_ERROR: 0 }, {
     get(target, name) {
@@ -43,6 +43,7 @@ function fixture(t, supported = true) {
         if (name.startsWith('create') || name === 'getUniformLocation') return {};
         if (name === 'getShaderParameter' || name === 'getProgramParameter') return true;
         if (name === 'getError' || name === 'getAttribLocation') return 0;
+        if (name === 'getParameter') return textureLimit;
       };
     },
   });
@@ -50,8 +51,10 @@ function fixture(t, supported = true) {
     style = { touchAction: 'pan-y' };
     attributes = new Map();
     captures = new Set();
-    getContext() { return supported ? gl : null; }
-    getBoundingClientRect() { return { width: 400, height: 600 }; }
+    measurements = 0;
+    rect = { width: 400, height: 600 };
+    getContext(...args) { calls.push({ name: 'getContext', args }); return supported ? gl : null; }
+    getBoundingClientRect() { this.measurements++; return this.rect; }
     hasAttribute(name) { return this.attributes.has(name); }
     getAttribute(name) { return this.attributes.get(name) ?? null; }
     setAttribute(name, value) { this.attributes.set(name, String(value)); }
@@ -62,8 +65,9 @@ function fixture(t, supported = true) {
     focus() {}
   }
   let image;
+  const images = [];
   let observer;
-  class TestImage { constructor() { image = this; } }
+  class TestImage { constructor() { image = this; images.push(this); } }
   class TestResizeObserver {
     constructor(callback) { this.callback = callback; observer = this; }
     observe() {}
@@ -79,10 +83,10 @@ function fixture(t, supported = true) {
   });
   const canvas = new Canvas();
   const statuses = [];
-  const control = mountPanorama(canvas, '/test-sphere.png', (status, info) => statuses.push({ status, info }));
+  const control = mountPanorama(canvas, source, (status, info) => statuses.push({ status, info }));
   t.after(control);
   return {
-    canvas, control, statuses, calls,
+    canvas, control, statuses, calls, images,
     get image() { return image; },
     get observer() { return observer; },
     dispatch(type, properties = {}) {
@@ -167,4 +171,133 @@ test('image failure and absent WebGL produce explicit states with compatible cle
   assert.equal(unsupported.control.zoomBy(-100).fov, PANORAMA_LIMITS.minFov);
   unsupported.control.reset();
   assert.equal(unsupported.control.getView().fov, 65);
+});
+
+test('programmatic camera takes shortest yaw path and cancels on input, replacement and disposal', async t => {
+  let frame = null, id = 0;
+  const raf = Object.getOwnPropertyDescriptor(globalThis, 'requestAnimationFrame');
+  const caf = Object.getOwnPropertyDescriptor(globalThis, 'cancelAnimationFrame');
+  Object.defineProperty(globalThis, 'requestAnimationFrame', { configurable: true, writable: true, value: callback => { frame = callback; return ++id; } });
+  Object.defineProperty(globalThis, 'cancelAnimationFrame', { configurable: true, writable: true, value: () => { frame = null; } });
+  t.after(() => {
+    if (raf) Object.defineProperty(globalThis, 'requestAnimationFrame', raf); else delete globalThis.requestAnimationFrame;
+    if (caf) Object.defineProperty(globalThis, 'cancelAnimationFrame', caf); else delete globalThis.cancelAnimationFrame;
+  });
+  const tick = time => { const callback = frame; frame = null; callback?.(time); };
+  const f = fixture(t);
+  assert.equal(await f.control.moveTo({ yaw: 1 }), false, 'not ready');
+  f.image.onload();
+  await f.control.moveTo({ yaw: 3.1, pitch: 0, fov: 65 }, { duration: 0 });
+  const flight = f.control.moveTo({ yaw: -3.1, pitch: .5, fov: 50 }, { duration: 1000 });
+  tick(0); tick(500);
+  near(Math.abs(f.control.getView().yaw), Math.PI);
+  near(f.control.getView().pitch, .25);
+  tick(1000); assert.equal(await flight, true);
+  near(f.control.getView().yaw, -3.1);
+  const interrupted = f.control.moveTo({ yaw: 1 });
+  f.dispatch('pointerdown', { pointerId: 1, clientX: 20, clientY: 20, pointerType: 'touch' });
+  assert.equal(await interrupted, false);
+  assert.equal(frame, null);
+  const old = f.control.moveTo({ yaw: 2 });
+  const latest = f.control.moveTo({ yaw: 0 });
+  assert.equal(await old, false);
+  f.control(); assert.equal(await latest, false);
+  assert.equal(frame, null);
+});
+
+function frameQueue(t) {
+  let id = 0;
+  const frames = new Map();
+  for (const [name, value] of Object.entries({
+    requestAnimationFrame: callback => { frames.set(++id, callback); return id; },
+    cancelAnimationFrame: key => frames.delete(key),
+  })) {
+    const original = Object.getOwnPropertyDescriptor(globalThis, name);
+    Object.defineProperty(globalThis, name, { configurable: true, writable: true, value });
+    t.after(() => { if (original) Object.defineProperty(globalThis, name, original); else delete globalThis[name]; });
+  }
+  return { frames, tick(time = 0) { const callbacks = [...frames.values()]; frames.clear(); callbacks.forEach(callback => callback(time)); } };
+}
+
+test('pointer bursts render once per frame without layout reads or idle redraws', t => {
+  const queue = frameQueue(t);
+  const f = fixture(t);
+  f.image.onload(); queue.tick();
+  let updates = 0;
+  f.control.setOnViewChange(() => updates++);
+  const draws = () => f.calls.filter(call => call.name === 'drawArrays').length;
+  const before = draws(), measurements = f.canvas.measurements;
+  f.dispatch('pointerdown', { pointerId: 1, pointerType: 'touch', clientX: 100, clientY: 100 });
+  for (let i = 0; i < 120; i++) f.dispatch('pointermove', { pointerId: 1, clientX: 100 + i, clientY: 110 });
+  assert.equal(queue.frames.size, 1);
+  assert.equal(draws(), before);
+  assert.ok(f.control.getView().yaw < 0, 'input state changes immediately');
+  f.control.projectHotspot({ yaw: 0, pitch: 0 });
+  assert.equal(f.canvas.measurements, measurements);
+  queue.tick();
+  assert.equal(draws(), before + 1);
+  assert.equal(updates, 2, 'one initial snapshot and one batched update');
+  assert.equal(queue.frames.size, 0, 'static panorama has no rendering loop');
+  f.control.zoomBy(5);
+  assert.equal(queue.frames.size, 1);
+  f.control();
+  assert.equal(queue.frames.size, 0, 'disposal cancels pending render');
+});
+
+test('resize observer caches geometry and caps the render buffer on high-DPI screens', t => {
+  const original = Object.getOwnPropertyDescriptor(globalThis, 'devicePixelRatio');
+  Object.defineProperty(globalThis, 'devicePixelRatio', { configurable: true, value: 4 });
+  t.after(() => { if (original) Object.defineProperty(globalThis, 'devicePixelRatio', original); else delete globalThis.devicePixelRatio; });
+  const f = fixture(t);
+  f.image.onload();
+  assert.deepEqual(f.calls.find(call => call.name === 'getContext').args[1], { antialias: false, alpha: false, depth: false, stencil: false });
+  assert.equal(f.canvas.width, 400 * PANORAMA_RENDER_LIMITS.maxDpr);
+  const measurements = f.canvas.measurements;
+  f.observer.callback([{ contentRect: { width: 4000, height: 2000 } }]);
+  assert.equal(f.canvas.measurements, measurements);
+  assert.equal(f.control.getView().width, 4000);
+  assert.ok(f.canvas.width * f.canvas.height <= PANORAMA_RENDER_LIMITS.maxPixels);
+});
+
+test('cubemaps use mobile derivatives, upload once and restore without refetching', t => {
+  const source = { kind: 'cubemap', faces: Array.from({ length: 6 }, (_, i) => `/desktop-${i}.jpg`),
+    mobileFaces: Array.from({ length: 6 }, (_, i) => `/mobile-${i}.jpg`) };
+  const f = fixture(t, true, source);
+  assert.deepEqual(f.images.map(image => image.src), source.mobileFaces);
+  for (const image of f.images) { image.complete = true; image.naturalWidth = image.naturalHeight = 1024; }
+  const uploads = () => f.calls.filter(call => call.name === 'texImage2D').length;
+  for (const image of f.images) image.onload();
+  assert.equal(uploads(), 6);
+  f.dispatch('webglcontextlost');
+  f.dispatch('webglcontextrestored');
+  assert.equal(uploads(), 12);
+  assert.equal(f.images.length, 6);
+  f.control();
+  assert.ok(f.images.every(image => image.src === '' && image.onload === null));
+});
+
+test('source initial view is the default and Home/reset restore it rather than generic horizon',t=>{
+  const initialView={yaw:0,pitch:.66,fov:90};
+  const f=fixture(t,true,{kind:'cubemap',faces:Array(6).fill('/face.jpg'),initialView});
+  near(f.control.getView().pitch,.66);assert.equal(f.control.getView().fov,90);
+  f.dispatch('keydown',{key:'ArrowDown'});f.control.zoomBy(-10);assert.notEqual(f.control.getView().pitch,.66);
+  f.control.reset();near(f.control.getView().pitch,.66);assert.equal(f.control.getView().fov,90);
+  f.dispatch('keydown',{key:'ArrowUp'});f.dispatch('keydown',{key:'Home'});near(f.control.getView().pitch,.66);
+});
+
+test('oversized cubemaps are resized to the GPU limit before upload', t => {
+  const original = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  const scaled = [];
+  Object.defineProperty(globalThis, 'document', { configurable: true, value: {
+    createElement() {
+      const canvas = { getContext: () => ({ drawImage() {} }) }; scaled.push(canvas); return canvas;
+    },
+  } });
+  t.after(() => { if (original) Object.defineProperty(globalThis, 'document', original); else delete globalThis.document; });
+  const f = fixture(t, true, { kind: 'cubemap', faces: Array(6).fill('/original.jpg') }, 1024);
+  for (const image of f.images) { image.complete = true; image.naturalWidth = image.naturalHeight = 4352; }
+  f.images[0].onload();
+  assert.equal(f.control.getView().ready, true);
+  assert.equal(scaled.length, 6);
+  assert.ok(scaled.every(canvas => canvas.width === 1024 && canvas.height === 1024));
 });

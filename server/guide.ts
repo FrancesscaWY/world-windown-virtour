@@ -1,4 +1,5 @@
-import { getPoi } from '../src/data/pois.js';
+import { getPoi, getHotspot } from '../src/data/pois.js';
+import { validVisitorPosition } from '../src/data/nearby-attractions.js';
 import type { AgentInput, Message } from './ai/types.ts';
 
 const record = (input: unknown): Record<string, unknown> => input && typeof input === 'object' && !Array.isArray(input) ? input as Record<string, unknown> : {};
@@ -14,6 +15,9 @@ export function guidePayload(input: { text?: string; context?: unknown }): Agent
   }
   const id = context.mentionedPoiId ?? context.selectedPoiId;
   const poi = typeof id === 'string' ? getPoi(id) : null;
+  const selected = typeof context.selectedPoiId === 'string' ? getPoi(context.selectedPoiId) : null;
+  const hotspot = context.view === 'panorama' && selected && typeof context.activeHotspotId === 'string'
+    ? getHotspot(selected.id, context.activeHotspotId) : null;
   const route = record(context.plannedRoute);
   const routeStops = (Array.isArray(route.stops) ? route.stops.slice(0, 12) : []).map(stop => {
     const id = record(stop).poiId;
@@ -25,8 +29,13 @@ export function guidePayload(input: { text?: string; context?: unknown }): Agent
     messages: [...history, ...(input.text ? [{ role: 'user' as const, content: input.text.trim() }] : [])],
     pageContext: {
       park: '深圳世界之窗', view: context.view === 'map' ? '园区地图' : '景点画面',
-      topic: poi ? { name: poi.name, summary: poi.summary, source: poi.source } : null,
+      ...(context.tourMode === 'companion' || context.tourMode === 'interactive' ? { tourMode:context.tourMode,
+        locationSource:context.visitorOriginSource === '模拟定位' ? 'simulated' as const : 'device' as const } : {}),
+      topic: poi ? { id: poi.id, name: poi.name, summary: poi.summary, source: poi.source } : null,
+      visitorPosition: validVisitorPosition(context.visitorOrigin) ? { latitude: record(context.visitorOrigin).latitude as number, longitude: record(context.visitorOrigin).longitude as number } : null,
       route: routeStops.length >= 2 ? { stops: routeStops } : null,
+      panorama: context.view === 'panorama' && selected?.panorama ? { poiId: selected.id,
+        activeHotspot: hotspot ? { id: hotspot.id, title: hotspot.title } : null } : null,
     },
   };
 }

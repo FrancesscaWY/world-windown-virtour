@@ -1,3 +1,7 @@
+// LEGACY bottom-dock/upward-menu assertions. Current map controls open downward;
+// use verify-map-interactions.mjs for placement, motion, menus and all 12 guides.
+// Preserve detailed rig rendering comparisons below as migration reference.
+console.warn('LEGACY layout assertions: use verify-map-interactions.mjs for the current map-first UI.');
 import { mkdir } from 'node:fs/promises';
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
 

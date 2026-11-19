@@ -38,7 +38,7 @@ test('one proxy port serves frontend and API; internal backend is loopback-only 
   }
 });
 
-test('proxy preserves validation, body limits, missing configuration and cross-site rejection', async t => {
+test('proxy preserves validation, body limits and missing configuration without Origin rejection', async t => {
   const { base } = await fixture(t);
   const requests = [
     [() => post(base, '/api/guide', { text: '' }), 400],
@@ -46,7 +46,7 @@ test('proxy preserves validation, body limits, missing configuration and cross-s
     [() => post(base, '/api/voice', { audio }), 503],
     [() => fetch(base + '/api/guide', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{' }), 400],
     [() => post(base, '/api/guide', { text: 'hello' }, { headers: { 'Content-Type': 'text/plain' } }), 415],
-    [() => post(base, '/api/guide', { text: 'hello' }, { headers: { 'Content-Type': 'application/json', Origin: 'https://evil.example', 'X-Forwarded-Host': 'evil.example' } }), 403],
+    [() => post(base, '/api/guide', { text: 'hello' }, { headers: { 'Content-Type': 'application/json', Origin: 'https://evil.example', 'X-Forwarded-Host': 'evil.example' } }), 503],
     [() => fetch(base + '/api/guide'), 405],
     [() => fetch(base + '/api/missing'), 404],
   ];
@@ -55,9 +55,9 @@ test('proxy preserves validation, body limits, missing configuration and cross-s
   }
 });
 
-test('explicit public Origin works behind a port-stripping tunnel without trusting forwarded-host', async t => {
+test('all Origins work behind a port-stripping tunnel without an allowlist', async t => {
   const publicOrigin = 'https://tour.example.com:55555';
-  const { proxy } = await fixture(t, { backendOptions: { env: { PUBLIC_ORIGINS: publicOrigin } } });
+  const { proxy } = await fixture(t);
   const call = (origin, extra = {}) => proxy.inject({ method: 'POST', url: '/api/guide', headers: {
     host: 'tour.example.com', origin, 'content-type': 'application/json', 'sec-fetch-site': 'same-origin', ...extra,
   }, payload: { text: '你好' } });
@@ -65,9 +65,9 @@ test('explicit public Origin works behind a port-stripping tunnel without trusti
   assert.equal(allowed.statusCode, 503); // Reaches the API's missing-key guard, not the Origin 403.
   assert.equal(allowed.json().error, 'GUIDE_NOT_CONFIGURED');
   for (const origin of ['https://tour.example.com:55556', 'http://tour.example.com:55555', 'https://evil.example', 'null', 'https://tour.example.com:55555/path']) {
-    assert.equal((await call(origin, { 'x-forwarded-host': 'tour.example.com:55555' })).statusCode, 403, origin);
+    assert.equal((await call(origin, { 'x-forwarded-host': 'tour.example.com:55555' })).statusCode, 503, origin);
   }
-  assert.equal((await call(publicOrigin, { 'sec-fetch-site': 'cross-site' })).statusCode, 403);
+  assert.equal((await call(publicOrigin, { 'sec-fetch-site': 'cross-site' })).statusCode, 503);
 });
 
 test('proxy passes voice uploads over 1MiB and returns each NDJSON chunk before the answer completes', async t => {

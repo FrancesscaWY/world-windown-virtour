@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { voicePresentation, shouldAutoStartVoice } from '../src/components/voice-status.js';
+import { voicePresentation, companionVoicePresentation, shouldAutoStartVoice } from '../src/components/voice-status.js';
 import { createStore } from '../src/guide/store.js';
 import { experienceMarkup } from '../src/components/experience.js';
 import { icon } from '../src/components/icons.js';
@@ -85,16 +85,27 @@ test('a scene failure pauses listening without blaming the microphone', () => {
   assert.match(retry.hint, /请允许权限/);
 });
 
-test('interactive voice and companion listen automatically; text, pauses and permissions remain respected', () => {
+test('post-activation auto-resume eligibility respects text, pauses and permissions; it is not capture consent', () => {
   const interactive = state();
   assert.equal(shouldAutoStartVoice(interactive), true);
-  assert.equal(shouldAutoStartVoice(state({ tourMode:'companion' })), true);
-  assert.equal(shouldAutoStartVoice(state({ tourMode:'companion', interactionInput:'text' })), true);
+  assert.equal(shouldAutoStartVoice(state({ tourMode:'companion' })), false);
+  assert.equal(shouldAutoStartVoice(state({ tourMode:'companion', interactionInput:'text' })), false);
   assert.equal(shouldAutoStartVoice(state({ tourMode:'companion', companionPaused:true })), false);
   for (const patch of [{ tourMode: 'immersive' }, { interactionInput: 'text' }, { voiceSession: true }, { guideError: '请允许权限' }, { voiceErrorCode: 'not-allowed' }, { microphoneState: 'denied' }, { microphoneState: 'restricted' }]) assert.equal(shouldAutoStartVoice(state(patch)), false);
   for (const options of [{ paused: true }, { hidden: true }, { dialogOpen: true }]) assert.equal(shouldAutoStartVoice(interactive, options), false);
   assert.equal(shouldAutoStartVoice(state({ tourMode: 'interactive', interactionInput: 'voice' }), { paused: true }), false, 'mode changes must not override a visitor pause');
   assert.equal(shouldAutoStartVoice(interactive, { paused: false }), true);
+});
+
+test('companion uses duplex states and explains background restrictions',()=>{
+  assert.match(companionVoicePresentation(state()).hint,/定位.*沿途讲解/);
+  for(const guideStatus of ['listening','speaking']){
+    const presentation=companionVoicePresentation(state({callState:'connected',voiceSession:true,guideStatus}));
+    assert.match(presentation.hint,/随时开口/);
+    assert.doesNotMatch(presentation.hint,/点话筒/);
+  }
+  assert.match(companionVoicePresentation(state({callState:'connected',pageBackgrounded:true})).hint,/后台受系统限制/);
+  assert.equal(companionVoicePresentation(state({callState:'error',voiceErrorCode:'not-allowed'})).icon,'mic-muted');
 });
 
 test('real microphone permission and pending recognition both remain preparation states', () => {
@@ -119,7 +130,7 @@ test('companion permission denial always uses a muted microphone, including duri
   }
 });
 
-test('initial UI offers combined text, voice, sound control and tap-to-call', () => {
+test('home offers labeled voice and text entrances separate from header tools, never a telephone affordance', () => {
   const markup = experienceMarkup();
   const button = /<button[^>]+id="speech-button"[^>]*>([\s\S]*?)<\/button>/.exec(markup);
   assert.ok(button);
@@ -127,12 +138,20 @@ test('initial UI offers combined text, voice, sound control and tap-to-call', ()
   assert.match(button[0], /aria-describedby="voice-hint"/);
   assert.match(markup, /id="guide-voice-toggle"/);
   assert.match(markup, /id="live-call-button"/);
-  assert.match(markup, />通话模式</);
-  for (const question of ['介绍一下埃菲尔铁塔','距离我最近的项目','现在哪里排队最短？']) assert.match(markup, new RegExp(question));
+  assert.match(markup, /id="text-mode-button"/);
+  for (const id of ['live-call-button','text-mode-button']) {
+    const entry = new RegExp(`<button[^>]+id="${id}"[^>]*>([\\s\\S]*?)<\\/button>`).exec(markup);
+    assert.ok(entry); assert.match(entry[0],new RegExp(`aria-pressed="${id==='live-call-button'?'true':'false'}"`));
+    assert.match(entry[1], /<span class="sr-only">(?:语音|文字)<\/span>/);
+  }
+  assert.match(markup, /class="interaction-launcher"/);
+  for (const question of ['介绍一下埃菲尔铁塔','帮我规划游览路线']) assert.match(markup, new RegExp(question));
   assert.match(markup, /<ul id="conversation-starters"/);
   assert.doesNotMatch(markup, /data-starter-question/);
-  assert.match(markup, /打字问我，或点话筒说一句/);
-  assert.match(markup, /点一下进入通话/);
+  assert.match(markup, /问问沐沐，想看哪里/);
+  assert.doesNotMatch(markup,/id="open-conversation"|class="icon-button conversation-history"/);
+  assert.ok(markup.includes(icon('conversation')));
+  assert.doesNotMatch(markup, />通话模式</);
   assert.doesNotMatch(button[1], /m9 5 11 7-11 7Z/);
   assert.equal((icon('listening').match(/class="listening-bar"/g) ?? []).length, 5);
   assert.equal(icon('listening'), icon('listening'));

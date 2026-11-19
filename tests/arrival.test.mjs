@@ -5,9 +5,9 @@ import { createHash } from 'node:crypto';
 import { createHandler } from '../server/handler.ts';
 import { tourModeFromSearch, isModeSelectionEntry, isWelcomeSwipe, mountWelcomeSwipe } from '../src/arrival/navigation.js';
 
-test('only the three real tour modes can be selected by a page address', () => {
-  for (const mode of ['interactive', 'immersive', 'companion']) assert.equal(tourModeFromSearch(`?mode=${mode}`), mode);
-  for (const search of ['', '?mode=', '?mode=other', '?mode=%22%5D', '?mode=__proto__']) assert.equal(tourModeFromSearch(search), 'interactive');
+test('only the two public tour modes can be selected; old immersive links open interactive mode', () => {
+  for (const mode of ['interactive', 'companion']) assert.equal(tourModeFromSearch(`?mode=${mode}`), mode);
+  for (const search of ['', '?mode=', '?mode=immersive', '?mode=other', '?mode=%22%5D', '?mode=__proto__']) assert.equal(tourModeFromSearch(search), 'interactive');
 });
 
 test('only an explicit mode-selection entry enables the one-time entrance presentation', () => {
@@ -47,16 +47,57 @@ test('swiping ignores controls, secondary pointers and cancelled gestures; clean
   dispose(); assert.equal(listeners.size, 0);
 });
 
+test('CTA swipes show drag feedback, swallow accidental clicks and also support a right-swipe return', () => {
+  const listeners = new Map(), styles = new Map(), classes = new Set(); let navigations = 0;
+  const element = {
+    style:{ setProperty:(key,value) => styles.set(key,value), removeProperty:key => styles.delete(key) },
+    classList:{ add:name => classes.add(name), remove:name => classes.delete(name) },
+    addEventListener:(type,fn) => listeners.set(type,fn), removeEventListener:type => listeners.delete(type),
+  };
+  const event = patch => ({ pointerId:1, button:0, clientX:230, clientY:100, timeStamp:10, target:{ closest:() => ({ hasAttribute:name => name === 'data-swipe-link' }) }, preventDefault() {}, ...patch });
+  let dispose = mountWelcomeSwipe(element, () => navigations++);
+  listeners.get('pointerdown')(event());
+  listeners.get('pointermove')(event({ clientX:195 }));
+  listeners.get('lostpointercapture')({ target:{} });
+  assert.equal(styles.get('--swipe-offset'), '-14px');
+  assert.ok(classes.has('is-swiping'));
+  listeners.get('pointerup')(event({ clientX:110, timeStamp:250 }));
+  assert.equal(navigations, 1);
+  assert.equal(styles.size + classes.size, 0);
+  let prevented = 0;
+  listeners.get('click')({ preventDefault:() => prevented++, stopImmediatePropagation() {} });
+  assert.equal(prevented, 1);
+  // A tap on the CTA remains a native link click; an aborted drag is not a click.
+  listeners.get('pointerdown')(event()); listeners.get('pointerup')(event({ timeStamp:50 }));
+  listeners.get('click')({ preventDefault:() => prevented++, stopImmediatePropagation() {} });
+  assert.equal(prevented, 1);
+  listeners.get('pointerdown')(event()); listeners.get('pointermove')(event({ clientX:210 }));
+  listeners.get('pointerup')(event({ clientX:210, timeStamp:250 }));
+  listeners.get('click')({ preventDefault:() => prevented++, stopImmediatePropagation() {} });
+  assert.equal(prevented, 2); assert.equal(navigations, 1);
+  dispose();
+  dispose = mountWelcomeSwipe(element, () => navigations++, { direction:'right' });
+  listeners.get('pointerdown')(event({ clientX:40 }));
+  listeners.get('pointerup')(event({ clientX:150, timeStamp:250 }));
+  assert.equal(navigations, 2);
+  dispose(); assert.equal(listeners.size, 0);
+});
+
 test('welcome and mode routes use real links and can load without mounting capture or the tour', async () => {
   const handler = createHandler();
   const welcome = await (await handler(new Request('http://localhost/'))).text();
   const modes = await (await handler(new Request('http://localhost/modes.html'))).text();
   assert.match(welcome, /data-page="welcome"/);
-  assert.match(welcome, /id="welcome-enter" href="\.\/modes\.html"/);
-  assert.match(welcome, /alt="世界之旅，AI 伴游"/);
+  assert.match(welcome, /id="welcome-enter" data-swipe-link href="\.\/modes\.html"/);
+  assert.match(welcome, /class="welcome-title-main">世界之窗/);
+  assert.doesNotMatch(welcome, /class="welcome-destination"|class="welcome-greeting"/);
+  assert.match(welcome, /alt="VirTour 系统图标"/);
+  assert.match(welcome, /<span>AI<\/span><span>伴游<\/span>/);
+  assert.match(welcome, /左滑，出发/);
+  assert.doesNotMatch(welcome, /世界之旅|欢迎来到<|welcome-title-companion\.png|你好，我是窗小游/);
   assert.doesNotMatch(welcome + modes, /src="[^"\n]*(?:main|tour-entry)\.js/);
   assert.match(modes, /src="\/src\/modes-page\.js"/);
-  for (const [mode, label] of [['interactive', '地图对话'], ['companion', '伴游模式']]) {
+  for (const [mode, label] of [['interactive', '交互模式'], ['companion', '伴游模式']]) {
     assert.match(modes, new RegExp(`href="\\./tour\\.html\\?mode=${mode}&amp;entry=modes"`));
     assert.ok(modes.includes(label));
   }

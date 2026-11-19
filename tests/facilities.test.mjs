@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { osmParkServices } from '../scripts/osm-map.mjs';
 import { externalAssets } from '../src/data/external-assets.js';
-import { facilities, parkServices } from '../src/data/facilities.js';
+import { facilities, parkServices, facilityMapPosition, facilityResult } from '../src/data/facilities.js';
+import { getPoi } from '../src/data/pois.js';
 import { resolveLocalIntent } from '../src/guide/intent.js';
 import { createGuideController } from '../src/guide/controller.js';
 import { createStore } from '../src/guide/store.js';
@@ -49,4 +50,23 @@ test('facility command cancels pending scenery narration and leaves no stale att
  guide.showFacilities('gate');assert.match(store.get().guideText,/不能确认/);
  guide.openPoi('pyramid');assert.equal(store.get().facilityInfo,null);
  guide.dispose();
+});
+
+test('historical dining areas keep coordinates null and never masquerade as precise/current locations',()=>{
+  const items=facilities.filter(f=>f.kind==='food');assert.equal(items.length,3);
+  for(const item of items){assert.equal(item.position,null);assert.equal(item.accessVerified,false);assert.match(item.sourceKind,/2020/);assert.match(item.note,/非精确店址/);assert.deepEqual(facilityMapPosition(item),getPoi(item.anchorPoiId).position);}
+  assert.match(facilityResult('food').text,/不是精确店址/);assert.match(facilityResult('food').text,/2020/);
+});
+
+test('manual browsing cancels pending narration but creates no messages, speech or remote request',()=>{
+  const store=createStore(),spoken=[];
+  const guide=createGuideController({store,actions:createTourActions(store),speech:{stop(){},speak:text=>spoken.push(text)}});
+  guide.openPoi('eiffel');assert.ok(store.get().pendingNarration);
+  const before=[...store.get().messages];
+  for(const kind of ['food','toilets','service','gate','all']){guide.browseFacilities(kind);assert.deepEqual(store.get().messages,before);}
+  guide.browsePoi('arc');assert.equal(store.get().view,'map');assert.equal(store.get().mentionedPoiId,'arc');
+  guide.browseMap();assert.equal(store.get().pendingNarration,null);assert.equal(guide.whenSceneReady('eiffel'),false);
+  guide.browsePoi('eiffel');createTourActions(store).enterPanorama('eiffel');
+  assert.equal(guide.browseHotspot('tower-arch'),true);assert.equal(store.get().activeHotspotId,'tower-arch');assert.equal(guide.browseHotspot('unknown'),false);
+  assert.deepEqual(store.get().messages,before);assert.deepEqual(spoken,[]);assert.equal(guide.browsePoi('unknown'),false);guide.dispose();
 });

@@ -43,7 +43,18 @@ const tourTheme = (await readFile(resolve(root, 'public/assets/tour-theme.css'),
 html = html.replace('<link rel="stylesheet" href="./assets/tour-theme.css" />', `<style>${tourTheme}</style>`);
 const callCss = await readFile(resolve(root, 'public/assets/call.css'), 'utf8');
 html = html.replace('<link rel="stylesheet" href="./assets/call.css" />', `<style>${callCss}</style>`);
+const introductionCss = await readFile(resolve(root, 'public/assets/introduction-view.css'), 'utf8');
+html = html.replace('<link rel="stylesheet" href="./assets/introduction-view.css" />', `<style>${introductionCss}</style>`);
+const nearbyCss = await readFile(resolve(root, 'public/assets/nearby-view.css'), 'utf8');
+html = html.replace('<link rel="stylesheet" href="./assets/nearby-view.css" />', `<style>${nearbyCss}</style>`);
+const mapCutout = `data:image/svg+xml;base64,${(await readFile(resolve(root, 'public/assets/map-cutout.svg'))).toString('base64')}`;
+const homeCss = (await readFile(resolve(root, 'public/assets/home.css'), 'utf8')).replaceAll("url('./map-cutout.svg')", `url('${mapCutout}')`);
+html = html.replace('<link rel="stylesheet" href="./assets/home.css" />', `<style>${homeCss}</style>`);
+const experienceCss=await readFile(resolve(root,'public/assets/experience-v12.css'),'utf8');
+html=html.replace('<link rel="stylesheet" href="./assets/experience-v12.css" />',`<style>${experienceCss}</style>`);
 html = html.replace('./assets/favicon.svg', await embedAsset('./assets/favicon.svg'));
+for(const asset of ['./assets/brand-favicon.png','./assets/brand-touch-icon.png'])
+  html=html.replaceAll(asset,await embedAsset(asset));
 const main = await embedModule(resolve(root, 'src/main.js'));
 html = html.replace('<script type="module" src="/src/tour-entry.js"></script>', `<script type="module">import '${main}';</script>`);
 html = html.replace('</head>', `<script type="importmap">${JSON.stringify({imports})}</script></head>`);

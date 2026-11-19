@@ -1,20 +1,22 @@
 import { getPoi } from '../data/pois.js';
-import { toMapPosition } from '../guide/location.js';
+import { toMapPosition, nearestPoi } from '../guide/location.js';
 import { projectMapPosition } from './map-projection.js';
+import { renderConversationMessages } from './conversation-message.js';
 
 export const INTERACTIVE_GREETING = '通话模式已接通。想去哪里、想了解什么，直接告诉我。';
 export const COMPANION_GREETING = '即将带您开启伴游旅程，提醒您带好耳机，我们现在出发';
 
 export function modeLayout(state) {
   if (state.tourMode === 'companion') return 'map';
-  if (state.tourMode === 'interactive') return 'map-chat';
+  if (state.textEditing) return 'text';
+  if (state.tourMode === 'interactive') return state.interactionMode === 'text' ? 'split' : 'map';
   return 'split';
 }
 
 export function modeHint(state) {
   if (state.tourMode === 'immersive') return '打字和我聊聊';
   if (state.tourMode === 'companion') return state.companionPaused ? '伴游已暂停 · 可随时继续旅程' : COMPANION_GREETING;
-  return '打字或语音都可以，我会一问一答';
+  return state.interactionMode === 'text' ? '聊聊园里的风景' : '想聊聊？点耳麦开始交流';
 }
 
 export function contextualPrompt(state) {
@@ -58,7 +60,11 @@ export function createMovementTrail({ limit = 600 } = {}) {
 
 export function mountModeWorkspace({ app, store, onOpenRecommendation, onDismissRecommendation }) {
   const $ = selector => app.querySelector(selector);
+  const progress=$('#conversation-progress');
   const trail = createMovementTrail();
+  const visited=new Set();
+  const marks=app.ownerDocument.createElement('div');marks.className='visited-pois';marks.setAttribute('aria-label','本次经过的景点');
+  $('.map-art').append(marks);
   const recommendation = createRecommendationState();
   const layer = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   layer.classList.add('movement-trail'); layer.setAttribute('viewBox', '0 0 100 100');
@@ -69,28 +75,36 @@ export function mountModeWorkspace({ app, store, onOpenRecommendation, onDismiss
     const paths = trail.paths(), key = paths.join('|');
     if (key === trailKey) return;
     trailKey = key;
-    layer.replaceChildren(...paths.map(d => {
+    layer.replaceChildren(...paths.flatMap(d => ['trail-halo','trail-line','trail-dots'].map(className => {
       const path = document.createElementNS(layer.namespaceURI, 'path');
-      path.setAttribute('d', d); path.setAttribute('vector-effect', 'non-scaling-stroke'); return path;
-    }));
+      path.setAttribute('class',className); path.setAttribute('d', d); path.setAttribute('vector-effect', 'non-scaling-stroke'); return path;
+    })));
   };
   const update = state => {
     const layout = modeLayout(state);
     app.dataset.workspace = layout;
-    const showConversation = layout === 'split' || layout === 'map-chat';
-    $('#conversation-mode-label').textContent = '与数字导游的对话';
+    const showConversation = layout === 'text' || layout === 'split' || layout === 'map-chat';
+    $('#conversation-mode-label').textContent = state.conversationTitle || '新对话';
     $('#conversation-hint').hidden = !showConversation || state.tourMode === 'interactive';
     $('#conversation-hint').textContent = modeHint(state);
     const prompt = recommendation.update(state);
     $('#conversation-prompt-label').textContent = prompt.label;
     $('#conversation-recommendation').hidden = prompt.hidden || !state.recommendedPoiIds?.length;
     $('#conversation-prompt').setAttribute('aria-label', `前往${prompt.name}并展开解说`);
-    if (state.tourMode !== previous.tourMode || state.visitorOriginSource !== previous.visitorOriginSource || !state.visitorOrigin) {
+    if (state.tourMode !== previous.tourMode || state.visitorOriginSource !== previous.visitorOriginSource || state.simulationRevision!==previous.simulationRevision || !state.visitorOrigin) {
       trail.clear(); renderTrail();
+      visited.clear();marks.replaceChildren();
     }
     if (state.tourMode === 'companion' && state.visitorOrigin && state.visitorOrigin !== previous.visitorOrigin) {
       const { x, y } = projectMapPosition(toMapPosition(state.visitorOrigin));
       if (trail.add({ x, y }, state.visitorOriginSource)) renderTrail();
+      const nearest=nearestPoi(state.visitorOrigin);
+      if((state.locationAccuracy??0)<=80 && nearest?.distance<=35 && !visited.has(nearest.poi.id)){
+        visited.add(nearest.poi.id);
+        const point=projectMapPosition(nearest.poi.position),mark=app.ownerDocument.createElement('span');
+        mark.className='visited-poi';mark.dataset.visitedPoi=nearest.poi.id;mark.title=`已途经 · ${nearest.poi.name}`;
+        mark.setAttribute('aria-label',mark.title);mark.style.setProperty('--x',`${point.x}%`);mark.style.setProperty('--y',`${point.y}%`);marks.append(mark);
+      }
     }
     const point = state.visitorOrigin ? toMapPosition(state.visitorOrigin) : null;
     const outside = point && (point.x < 0 || point.x > 100 || point.y < 0 || point.y > 100);
@@ -98,26 +112,26 @@ export function mountModeWorkspace({ app, store, onOpenRecommendation, onDismiss
     $('#trail-source').textContent = source;
     const hiddenOpeningMessages = [INTERACTIVE_GREETING, COMPANION_GREETING];
     const isHiddenOpening = row => row.role !== 'user' && hiddenOpeningMessages.includes(row.text ?? row.content);
-    const rows = [...(state.messages ?? [])].filter(row => !isHiddenOpening(row));
+    const rows = [...(state.conversationTranscript ?? state.messages ?? [])].filter(row => !isHiddenOpening(row));
+    $('#conversation-empty').hidden=rows.length>0;
+    const name=app.querySelector('#companion-pet')?.dataset.guideName??'沐沐';
+    $('#conversation-empty h3').textContent=`你好，我是${name}。`;
     const hasVisitorMessage = rows.some(row => row.role === 'user');
     const showStarters = state.tourMode === 'interactive' && state.showConversationStarters && !hasVisitorMessage;
     $('#conversation-starters').hidden = !showStarters;
-    $('#conversation-panel').hidden = !showConversation || (!showStarters && !rows.length && !state.recommendedPoiIds?.length);
+    $('#conversation-panel').hidden = !showConversation;
     const log = $('#conversation-log');
     log.hidden = rows.length === 0;
     const key = JSON.stringify(rows);
-    if (key !== contentKey) {
+    if (key !== contentKey && showConversation) {
       contentKey = key;
       const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 50;
-      log.replaceChildren(...rows.slice(-12).map(row => {
-        const item = document.createElement('div'); item.className = `conversation-message ${row.role === 'user' ? 'from-visitor' : 'from-guide'}`;
-        const label = document.createElement('span'); label.className = 'conversation-author'; label.textContent = row.role === 'user' ? '你' : '数字导游';
-        const text = document.createElement('p'); text.textContent = row.text ?? row.content;
-        label.classList.add('sr-only');
-        item.append(label, text); return item;
-      }));
+      renderConversationMessages(log,rows);
       if (atBottom || state.messages?.at(-1)?.role === 'user') log.scrollTop = log.scrollHeight;
     }
+    // Keep the waiting hint beside the pending question, inside the same scroll flow.
+    if(progress.parentElement!==log || log.lastElementChild!==progress)log.append(progress);
+    progress.hidden=state.guideStatus!=='thinking' || rows.at(-1)?.role!=='user';
     $('#guide-announcement').setAttribute('aria-live', showConversation ? 'off' : 'polite');
     previous = { ...state };
   };
@@ -131,7 +145,7 @@ export function mountModeWorkspace({ app, store, onOpenRecommendation, onDismiss
   $('#conversation-dismiss').addEventListener('click', dismissClick);
   const unsubscribe = store.subscribe(update); update(store.get());
   return () => {
-    unsubscribe(); layer.remove(); $('#conversation-prompt').removeEventListener('click', promptClick);
+    unsubscribe(); layer.remove(); marks.remove(); $('#conversation-prompt').removeEventListener('click', promptClick);
     $('#conversation-dismiss').removeEventListener('click', dismissClick);
   };
 }
